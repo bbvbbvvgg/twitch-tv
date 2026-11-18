@@ -1,0 +1,15 @@
+build/
+app/build/
+.gradle/
+.kotlin/
+local.properties
+keystore/
+*.jks
+test-report/
+*.keystore
+*.p12
+*.pfx
+*.gpg
+.store_pass
+.bundle_pass
+signing/
