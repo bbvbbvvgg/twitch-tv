@@ -16,7 +16,10 @@ object DiagLog {
 
     private val secretPatterns = listOf(
         Regex("""(?i)(sig|token|nauth|nauthsig|signature|access_token|oauth)=([^&\s"]+)""") to "$1=<скрыто>",
-        Regex("""(?i)(authorization|client-integrity)\s*[:=]\s*\S+""") to "$1: <скрыто>",
+        Regex("""(?i)(authorization|client-integrity)\s*[:=]\s*(?:(?:OAuth|Bearer)\s+)?\S+""") to "$1: <скрыто>",
+        Regex("""(?i)\b(OAuth|Bearer)\s+[a-z0-9]{20,}""") to "$1 <скрыто>",
+        Regex("""(?i)"(access_token|refresh_token|device_code)"\s*:\s*"[^"]*"""") to "\"$1\":\"<скрыто>\"",
+        Regex("""(?i)(refresh_token|device_code)=([^&\s"]+)""") to "$1=<скрыто>",
         Regex("""(?i)"(value|signature)"\s*:\s*"[^"]*"""") to "\"$1\":\"<скрыто>\"",
         // Media playlist / segment URLs embed signed paths; keep host only.
         Regex("""https://([a-z0-9.-]+\.ttvnw\.net|[a-z0-9.-]+\.cloudfront\.net)/[^\s"]+""") to "https://$1/…",

@@ -13,3 +13,7 @@ test-report/
 .store_pass
 .bundle_pass
 signing/
+env.sh
+*.apk
+*.aab
+*.idsig

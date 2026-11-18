@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import su.expensive.twitchtv.data.Account
 import su.expensive.twitchtv.data.Net
 import su.expensive.twitchtv.data.Prefs
 
@@ -16,6 +17,7 @@ class App : Application(), ImageLoaderFactory {
         instance = this
         Net.init(this)
         prefs = Prefs(this)
+        Account.init(this)
     }
 
     /** Small, bounded image caches: TVs often have 1–2 GB RAM. */

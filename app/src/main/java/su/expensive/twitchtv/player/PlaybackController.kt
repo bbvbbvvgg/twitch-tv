@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import su.expensive.twitchtv.data.Account
 import su.expensive.twitchtv.data.AdFilter
 import su.expensive.twitchtv.data.BufferMode
 import su.expensive.twitchtv.data.Hls
@@ -108,6 +109,9 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
     private var watchdogJob: Job? = null
     private var retryJob: Job? = null
     private var hevcBroken = false
+    /** Set when >1080p dropped frames / failed to decode in this session → cap at 1080p. */
+    private var hiResBroken = false
+    private val hiResGuard = QualityPolicy.HiResGuard()
 
     // ---------- auto quality / stability bookkeeping ----------
     private var autoCap = 0                         // index into variants (0 = best)
@@ -205,6 +209,7 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
         autoCap = 0
         autoCapLabel = null
         rebuffers.clear(); recoverTimes.clear(); backoffStep = 0
+        hiResBroken = false; hiResGuard.reset()
         status = PlayStatus.LOADING; statusText = "Загрузка…"
         diag.reset()
         DiagLog.log("Открываю $login (токен: $primaryType, VPN-интерфейс: ${isVpnActive()}, буфер: ${mode.name})")
@@ -214,30 +219,56 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
 
     private suspend fun resolvePrimary(): List<Variant> = withContext(Dispatchers.IO) {
         val codecs = DeviceCaps.usherCodecs(prefs.allowHevc && !hevcBroken)
-        val tok = TwitchApi.playbackToken(login, primaryType)
-        val url = TwitchApi.usherUrl(login, tok, codecs)
-        val r = Net.getText(url)
-        when {
-            r.ok -> {
-                val info = Hls.twitchInfo(r.body)
-                val country = info["USER-COUNTRY"]
-                if (country != diag.twitchCountry) DiagLog.log("Twitch определил страну запроса: ${country ?: "нет данных"}")
-                diag.twitchCountry = country
-                Hls.parseMultivariant(r.body)
+        // Signed-in viewers get >1080p renditions; backups for ad bypass stay anonymous.
+        var oauth = Account.accessToken()
+        fun fetch(type: String): List<Variant> {
+            val tok = try {
+                TwitchApi.playbackToken(login, type, oauth = oauth)
+            } catch (e: TwitchApi.AuthRejectedException) {
+                oauth = Account.accessToken(forceRefresh = true)
+                if (oauth != null) TwitchApi.playbackToken(login, type, oauth = oauth)
+                else TwitchApi.playbackToken(login, type)
             }
-            r.code == 404 || r.code == 403 -> throw OfflineException()
-            else -> throw IOException("usher HTTP ${r.code}")
+            val r = Net.getText(TwitchApi.usherUrl(login, tok, codecs))
+            return when {
+                r.ok -> {
+                    val info = Hls.twitchInfo(r.body)
+                    val country = info["USER-COUNTRY"]
+                    if (country != diag.twitchCountry) DiagLog.log("Twitch определил страну запроса: ${country ?: "нет данных"}")
+                    diag.twitchCountry = country
+                    Hls.parseMultivariant(r.body)
+                }
+                r.code == 404 || r.code == 403 -> throw OfflineException()
+                else -> throw IOException("usher HTTP ${r.code}")
+            }
         }
+        var list = fetch(primaryType)
+        // If the ad-friendly player type hides >1080p from a signed-in viewer, "site" is used instead
+        // (Twitch documents that non-"site" player types may lose higher qualities).
+        if (oauth != null && primaryType != "site" && QualityPolicy.maxHeight(list) <= 1080) {
+            val site = runCatching { fetch("site") }.getOrNull()
+            if (site != null && QualityPolicy.maxHeight(site) > 1080) {
+                DiagLog.log("$primaryType без >1080p, site с ${QualityPolicy.maxHeight(site)}p — основной токен site")
+                primaryType = "site"; list = site
+            }
+        }
+        diag.account = Account.login?.takeIf { oauth != null }?.let { "вход: $it" } ?: "аноним"
+        diag.offered = Hls.sortVideo(list).joinToString(" ") { "${it.label}/${it.codecLabel}" }
+        DiagLog.log("Usher ($primaryType, ${diag.account}, codecs=$codecs): ${diag.offered}")
+        list
     }
 
     private class OfflineException : IOException("offline")
 
     private fun playable(v: List<Variant>): List<Variant> = Hls.sortVideo(v).filter {
-        when {
+        val codecOk = when {
             it.isHevc -> prefs.allowHevc && !hevcBroken && DeviceCaps.hevcHardware
             it.isAv1 -> prefs.allowHevc && !hevcBroken && DeviceCaps.av1Hardware
             else -> true
         }
+        // >1080p only when the TV's hardware decoder declares that exact size and frame rate,
+        // and not after it already failed in this session (then 1080p60 is the ceiling).
+        codecOk && (it.height <= 1080 || (!hiResBroken && DeviceCaps.supports(it)))
     }
 
     private suspend fun resolveAndPlay(initial: Boolean) {
@@ -466,6 +497,23 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
     }
 
     // =====================================================================================
+    // >1080p safety net: back to 1080p60 for the rest of the session
+    // =====================================================================================
+    private fun capTo1080(why: String) {
+        if (hiResBroken) return
+        hiResBroken = true
+        hiResGuard.reset()
+        DiagLog.log("1440p: $why — откат на 1080p60 до конца сеанса")
+        primaryVariants = primaryVariants.filter { it.height <= 1080 }
+        variants = primaryVariants
+        autoCap = 0
+        val want = current
+        val target = (if (want != null) Hls.closest(primaryVariants, 1080, want.fpsRounded) else null) ?: primaryVariants.firstOrNull()
+        if (target == null) { reResolve("нет вариантов ≤1080p"); return }
+        if (source == Source.PRIMARY) playUrl(target, "откат на 1080p") else current = target
+    }
+
+    // =====================================================================================
     // Quality
     // =====================================================================================
     fun selectQuality(choice: QualityChoice?) {
@@ -550,6 +598,9 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
                 error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> {
                     player.seekToDefaultPosition(); player.prepare()
                 }
+                error.errorCode in DECODER_ERRORS && (current?.height ?: 0) > 1080 && !hiResBroken -> {
+                    capTo1080("ошибка декодера ${error.errorCodeName}")
+                }
                 error.errorCode in DECODER_ERRORS && current?.isHevc == true -> {
                     hevcBroken = true
                     DiagLog.log("HEVC-декодер не справился — перехожу на H.264")
@@ -628,6 +679,11 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
                     if (rendered >= lastRendered) diag.renderFps = (rendered - lastRendered) * 1000.0 / dt
                     lastRendered = rendered
                     diag.droppedFrames = c.droppedBufferCount
+                    val cur = current
+                    if (cur != null && cur.height > 1080 && source == Source.PRIMARY && player.playbackState == Player.STATE_READY) {
+                        val why = hiResGuard.onTick(now, c.droppedBufferCount, diag.renderFps, cur.fps)
+                        if (why != null) capTo1080(why)
+                    } else hiResGuard.reset()
                 }
                 lastTick = now
                 diag.bufferMs = player.totalBufferedDuration
@@ -740,6 +796,10 @@ class Diagnostics {
     var vpn by mutableStateOf(false)
     /** USER-COUNTRY from Twitch's usher response for the current stream; null = not reported. */
     var twitchCountry by mutableStateOf<String?>(null)
+    /** "аноним" or "вход: <login>" for the primary token. Never the token itself. */
+    var account by mutableStateOf("аноним")
+    /** Every video rendition usher listed for the primary token, before device filtering. */
+    var offered by mutableStateOf("")
 
     private val window = ArrayDeque<Pair<Long, Long>>() // (time, bytes)
 
@@ -771,7 +831,8 @@ class Diagnostics {
         appendLine("Битрейт факт.: ${actualBitrate?.let { "${it / 1000} кбит/с" } ?: "—"}  оценка канала: ${if (bandwidthEstimate > 0) "${bandwidthEstimate / 1000} кбит/с" else "—"}")
         appendLine("Задержка от эфира: ${liveOffsetMs?.let { "%.1f с".format(it / 1000.0) } ?: "недоступна"}")
         appendLine("Переподключений: $reconnects  ребуферов: $rebuffers")
-        appendLine("Источник: $source")
+        appendLine("Источник: $source  ($account)")
+        appendLine("Usher предложил: ${offered.ifEmpty { "—" }}")
         // Honest wording: a VPN interface on the app's network does not prove Happ sends Twitch
         // through the proxy (Happ's own rules may route these domains direct). The country Twitch
         // reports is measured, but only for the usher request, not for every video segment.

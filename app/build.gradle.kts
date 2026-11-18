@@ -13,8 +13,8 @@ android {
         applicationId = "su.expensive.twitchtv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1-test"
         resourceConfigurations += listOf("ru", "en")
     }
 
@@ -23,6 +23,10 @@ android {
             storeFile = rootProject.file("keystore/twitchtv.jks")
             storePassword = (project.findProperty("TV_STORE_PASS") ?: System.getenv("TV_STORE_PASS") ?: "").toString()
             keyAlias = "twitchtv"
+            // v1 (JAR) in addition to v2/v3: some TV firmwares and third-party installers only accept it.
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
             keyPassword = (project.findProperty("TV_STORE_PASS") ?: System.getenv("TV_STORE_PASS") ?: "").toString()
         }
     }
@@ -55,6 +59,9 @@ android {
         unitTests.isIncludeAndroidResources = true
         unitTests.all { t ->
             t.systemProperty("live", System.getProperty("live") ?: "false")
+            t.systemProperty("shots", System.getProperty("shots") ?: "false")
+            // Screenshots need Robolectric's native graphics (x86_64/macOS only); opt-in with -Dshots=true.
+            if (System.getProperty("shots") != "true") t.exclude("**/UiScreenshots*")
             t.systemProperty("liveOut", rootProject.file("test-report/live-report.txt").absolutePath)
             t.testLogging { events("passed", "failed", "skipped"); showStandardStreams = true }
         }

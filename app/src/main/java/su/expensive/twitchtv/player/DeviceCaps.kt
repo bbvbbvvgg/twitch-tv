@@ -38,6 +38,25 @@ object DeviceCaps {
     val hevc1440p60: Boolean get() = hevc.any { it.hardware && it.fps1440 }
     val av1Hardware: Boolean get() = av1.any { it.hardware }
 
+    /**
+     * A hardware decoder accepts this rendition's size. Frame rate is deliberately not required:
+     * many TV SoCs under-report performance points, so 1440p60 is tried and [QualityPolicy.HiResGuard]
+     * falls back to 1080p60 if the TV really cannot keep up.
+     */
+    fun supports(v: su.expensive.twitchtv.data.Variant): Boolean {
+        val mime = when { v.isHevc -> "video/hevc"; v.isAv1 -> "video/av01"; else -> "video/avc" }
+        val w = if (v.width > 0) v.width else v.height * 16 / 9
+        return supportsCache.getOrPut("$mime $w x ${v.height}") {
+            runCatching {
+                MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+                    !info.isEncoder && isHardware(info) && info.supportedTypes.any { it.equals(mime, true) } &&
+                        runCatching { info.getCapabilitiesForType(mime).videoCapabilities.isSizeSupported(w, v.height) }.getOrDefault(false)
+                }
+            }.getOrDefault(false)
+        }
+    }
+    private val supportsCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     fun usherCodecs(allowHevc: Boolean): String = buildList {
         if (allowHevc && av1Hardware) add("av1")
         if (allowHevc && hevcHardware) add("h265")

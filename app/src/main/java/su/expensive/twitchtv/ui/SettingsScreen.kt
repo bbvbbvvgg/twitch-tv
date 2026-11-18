@@ -22,6 +22,7 @@ import androidx.tv.material3.ListItem
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import su.expensive.twitchtv.BuildConfig
+import su.expensive.twitchtv.data.Account
 import su.expensive.twitchtv.data.BufferMode
 import su.expensive.twitchtv.data.DefaultQuality
 import su.expensive.twitchtv.data.Prefs
@@ -36,10 +37,19 @@ import java.util.Locale
 fun SettingsScreen(prefs: Prefs) {
     var v by remember { mutableIntStateOf(0) } // recomposition trigger
     var exportMsg by remember { mutableStateOf<String?>(null) }
+    var loggingIn by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
     fun onOff(b: Boolean) = if (b) "Вкл" else "Выкл"
 
     LazyColumn(contentPadding = PaddingValues(bottom = 48.dp), modifier = Modifier.fillMaxWidth(0.75f)) {
+        item { v
+            val who = Account.login
+            Row("Аккаунт Twitch", if (who != null) who else if (loggingIn) "вход…" else "не выполнен",
+                if (who != null) "Нажмите, чтобы выйти (токен будет отозван)" else "Вход через код на twitch.tv/activate — открывает 1440p") {
+                if (who != null) { Account.signOut(); v++ } else loggingIn = !loggingIn
+            }
+            if (loggingIn && who == null) LoginPanel(onFinished = { loggingIn = false; v++ })
+        }
         item { v; Row("Обход рекламы", onOff(prefs.adBlock), "Чистый резервный поток во время рекламы; при неудаче показывается реклама") { prefs.adBlock = !prefs.adBlock; v++ } }
         item { v; Row("Автокачество", onOff(prefs.autoQuality), "Максимум, снижение только при повторных зависаниях") { prefs.autoQuality = !prefs.autoQuality; v++ } }
         item { v; Row("Качество по умолчанию", prefs.defaultQuality.title) {

@@ -131,3 +131,14 @@ TV_STORE_PASS=... ./gradlew assembleRelease  # нужен keystore/twitchtv.jks
 
 Идеи по получению потока основаны на изучении SmartTwitchTV (GPL-3.0) и TwitchAdSolutions/VAFT;
 код написан заново. Приложение не аффилировано с Twitch.
+
+## 1.1-test: вход в Twitch и 1440p60
+
+- Twitch отдаёт рендишены выше 1080p (на recrent — «1440p60 (source)», 2560×1440, HEVC Main L5.0) только вошедшим зрителям и только если в `supported_codecs` есть `h265`. Без входа максимум 1080p60 (транскод) при любом playerType.
+- Вход: Настройки → «Аккаунт Twitch» → код на twitch.tv/activate (OAuth Device Code Flow). Пароль вводится только на сайте Twitch, cookies браузера не используются.
+- Client-ID: GQL принимает только first-party Client-ID Twitch, а токен действует только со своим Client-ID. Поэтому токен от своего приложения на dev.twitch.tv для PlaybackAccessToken не подходит; используется Client-ID официального Android TV приложения Twitch. Это неофициальное использование API (серая зона правил Twitch).
+- Токен: AES-256-GCM, ключ в Android Keystore, allowBackup=false; refresh/validate по правилам Twitch; выход отзывает токен. В DiagLog токены, refresh_token и device_code вырезаются (тесты).
+- Авторизован только основной токен; резервные потоки для обхода рекламы анонимные (≤1080p60), после рекламы — возврат к 1440p.
+- playerType: с входом 1440p есть и у popout, и у site, и у embed; если popout его не отдаст — автоматически берётся site.
+- Откат на 1080p60 до конца сеанса: ошибка декодера, ≥30 пропущенных кадров за 10 с, или вывод <80 % fps 15 с подряд (после 5 с прогрева).
+- В диагностике: «Источник … (вход: <логин>)» и «Usher предложил: …» — список рендишенов до фильтрации.

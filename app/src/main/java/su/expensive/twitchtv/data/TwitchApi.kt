@@ -23,8 +23,9 @@ data class StreamItem(
 data class PlaybackToken(val value: String, val signature: String)
 
 /**
- * Anonymous Twitch GQL access, the same public web client id every Twitch web/TV client
- * (and SmartTwitchTV / TwitchAdSolutions) uses. No user token is ever sent anywhere.
+ * Twitch GQL access. Everything is anonymous (public web client id) except the primary
+ * PlaybackAccessToken when the viewer signed in via [TwitchAuth]: Twitch only lists >1080p
+ * renditions (1440p HEVC) to signed-in viewers.
  */
 object TwitchApi {
     const val CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
@@ -41,15 +42,21 @@ object TwitchApi {
         return (1..32).map { chars[Random.nextInt(chars.length)] }.joinToString("")
     }
 
+    /** The signed-in token was rejected (expired/revoked); caller refreshes or falls back to anonymous. */
+    class AuthRejectedException : IOException("GQL: токен отклонён")
+
     @Throws(IOException::class)
-    private fun gql(body: String, devId: String = deviceId): JSONObject {
+    private fun gql(body: String, devId: String = deviceId, oauth: String? = null): JSONObject {
         val req = Request.Builder().url(GQL)
-            .header("Client-ID", CLIENT_ID)
+            // A user token is only valid together with the client id it was issued to.
+            .header("Client-ID", if (oauth != null) TwitchAuth.TV_CLIENT_ID else CLIENT_ID)
             .header("X-Device-Id", devId)
+            .apply { if (oauth != null) header("Authorization", "OAuth $oauth") }
             .post(body.toRequestBody(JSON))
             .build()
         Net.http.newCall(req).execute().use { r ->
             val txt = r.body?.string() ?: ""
+            if (oauth != null && r.code == 401) throw AuthRejectedException()
             if (!r.isSuccessful) throw IOException("GQL HTTP ${r.code}")
             val obj = JSONObject(txt)
             obj.optJSONArray("errors")?.let { errs ->
@@ -167,7 +174,7 @@ object TwitchApi {
      * preroll ads for anonymous viewers, "autoplay" (android) is a 360p-only clean fallback.
      */
     @Throws(IOException::class)
-    fun playbackToken(login: String, playerType: String, devId: String = deviceId): PlaybackToken {
+    fun playbackToken(login: String, playerType: String, devId: String = deviceId, oauth: String? = null): PlaybackToken {
         val platform = if (playerType == "autoplay") "android" else "web"
         val body = JSONObject()
             .put("operationName", "PlaybackAccessToken")
@@ -176,7 +183,7 @@ object TwitchApi {
                 .put("playerType", playerType).put("platform", platform))
             .put("extensions", JSONObject().put("persistedQuery",
                 JSONObject().put("version", 1).put("sha256Hash", TOKEN_HASH)))
-        val t = gql(body.toString(), devId).optJSONObject("data")?.optJSONObject("streamPlaybackAccessToken")
+        val t = gql(body.toString(), devId, oauth).optJSONObject("data")?.optJSONObject("streamPlaybackAccessToken")
             ?: throw IOException("Нет токена воспроизведения (канал не найден?)")
         return PlaybackToken(t.getString("value"), t.getString("signature"))
     }
@@ -184,7 +191,7 @@ object TwitchApi {
     fun usherUrl(login: String, token: PlaybackToken, codecs: String): String {
         fun e(s: String) = URLEncoder.encode(s, "UTF-8")
         return "https://usher.ttvnw.net/api/channel/hls/${e(login.lowercase())}.m3u8" +
-            "?allow_source=true&allow_audio_only=true&fast_bread=true&playlist_include_framerate=true" +
+            "?platform=web&allow_source=true&allow_audio_only=true&fast_bread=true&playlist_include_framerate=true" +
             "&reassignments_supported=true&player_backend=mediaplayer&cdm=wv" +
             "&supported_codecs=${e(codecs)}&p=${Random.nextInt(1_000_000, 9_999_999)}" +
             "&sig=${e(token.signature)}&token=${e(token.value)}"
