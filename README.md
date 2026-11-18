@@ -6,7 +6,7 @@
 
 - **Имя пакета (постоянное): `su.expensive.twitchtv`** — его нужно указывать в правилах Happ.
 - Версия: **2.0.0 (versionCode 3)**. Android 7.0+ (minSdk 24), target SDK 35.
-- APK: в [GitHub Releases](https://github.com/bbvbbvvgg/twitch-tv/releases) — `TwitchTV-2.0.0.apk`,
+- APK: [`release/TwitchTV-2.0.0.apk`](release/TwitchTV-2.0.0.apk) (SHA-256 рядом), описание — в [GitHub Releases](https://github.com/bbvbbvvgg/twitch-tv/releases),
   подписан тем же ключом, что 1.x: ставится поверх, избранное, история, настройки и вход сохраняются.
 
 ## Четыре дизайна
