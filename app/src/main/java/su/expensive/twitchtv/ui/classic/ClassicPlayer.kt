@@ -1,4 +1,4 @@
-package su.expensive.twitchtv.ui
+package su.expensive.twitchtv.ui.classic
 
 import android.view.KeyEvent as AKeyEvent
 import android.view.ViewGroup
@@ -76,64 +76,36 @@ import su.expensive.twitchtv.data.StreamItem
 import su.expensive.twitchtv.player.PlayStatus
 import su.expensive.twitchtv.player.PlaybackController
 import su.expensive.twitchtv.player.QualityChoice
+import su.expensive.twitchtv.ui.core.PlayerSession
+import su.expensive.twitchtv.ui.core.ToastTimer
+import su.expensive.twitchtv.ui.core.VideoSurface
+import su.expensive.twitchtv.ui.core.formatViewers
+import su.expensive.twitchtv.ui.core.playerKeys
+import su.expensive.twitchtv.ui.core.statusMessage
 
 private enum class Overlay { NONE, QUALITY, STREAMS }
 
 @UnstableApi
 @Composable
-fun PlayerScreen(prefs: Prefs, start: StreamItem, list: List<StreamItem>, onExit: () -> Unit) {
+fun PlayerScreen(session: PlayerSession) {
     val ctx = LocalContext.current
-    val controller = remember { PlaybackController(ctx.applicationContext, prefs) }
-    val chat = remember { ChatClient(prefs.chatThirdPartyEmotes) }
-    var item by remember { mutableStateOf(start) }
+    val s = session
+    val controller = s.controller
+    val chat = s.chat
+    val item = s.item
+    val list = s.list
     var panel by remember { mutableStateOf(false) }
     var overlay by remember { mutableStateOf(Overlay.NONE) }
-    var chatOn by remember { mutableStateOf(prefs.chatEnabled) }
-    var diagOn by remember { mutableStateOf(prefs.showDiagnostics) }
     var lastKey by remember { mutableStateOf(System.currentTimeMillis()) }
-    var toast by remember { mutableStateOf<String?>(null) }
-    var favVer by remember { mutableIntStateOf(0) }
     val rootFocus = remember { FocusRequester() }
     val panelFocus = remember { FocusRequester() }
 
-    fun switchTo(s: StreamItem) {
-        item = s
-        prefs.addHistory(s.login)
-        controller.open(s.login)
-        if (chatOn) chat.connect(s.login)
-        toast = s.displayName
-    }
-    fun step(delta: Int) {
-        if (list.isEmpty()) return
-        val idx = list.indexOfFirst { it.login == item.login }
-        val next = list[((if (idx < 0) 0 else idx) + delta + list.size) % list.size]
-        if (next.login != item.login) switchTo(next)
-    }
-
-    // Lifecycle: free decoders/network when the TV app goes to background, reopen at live edge on return.
-    val owner = LocalLifecycleOwner.current
-    DisposableEffect(owner) {
-        var stopped = false
-        val obs = LifecycleEventObserver { _, e ->
-            when (e) {
-                Lifecycle.Event.ON_STOP -> { stopped = true; controller.player.stop(); chat.disconnect() }
-                Lifecycle.Event.ON_START -> if (stopped) { stopped = false; controller.open(item.login); if (chatOn) chat.connect(item.login) }
-                else -> {}
-            }
-        }
-        owner.lifecycle.addObserver(obs)
-        onDispose { owner.lifecycle.removeObserver(obs); chat.release(); controller.release() }
-    }
-    LaunchedEffect(Unit) {
-        controller.open(start.login)
-        if (chatOn) chat.connect(start.login)
-        rootFocus.requestFocus()
-    }
+    LaunchedEffect(Unit) { rootFocus.requestFocus() }
     // Auto-hide the control panel.
     LaunchedEffect(panel, lastKey, overlay) {
         if (panel && overlay == Overlay.NONE) { delay(8_000); panel = false; rootFocus.requestFocus() }
     }
-    LaunchedEffect(toast) { if (toast != null) { delay(2_500); toast = null } }
+    ToastTimer(s)
     LaunchedEffect(panel) { if (panel) runCatching { delay(50); panelFocus.requestFocus() } }
 
     BackHandler(enabled = overlay != Overlay.NONE || panel) {
@@ -143,41 +115,17 @@ fun PlayerScreen(prefs: Prefs, start: StreamItem, list: List<StreamItem>, onExit
 
     Box(
         Modifier.fillMaxSize().background(Color.Black)
-            .onPreviewKeyEvent { ev ->
-                lastKey = System.currentTimeMillis()
-                if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                val code = ev.key.nativeKeyCode
-                when (code) {
-                    AKeyEvent.KEYCODE_CHANNEL_UP -> { step(1); true }
-                    AKeyEvent.KEYCODE_CHANNEL_DOWN -> { step(-1); true }
-                    AKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, AKeyEvent.KEYCODE_MEDIA_PLAY -> { controller.resumeLive(); true }
-                    else -> if (!panel && overlay == Overlay.NONE && code in OPEN_KEYS) { panel = true; true } else false
-                }
-            }
+            .playerKeys(s, controlsVisible = { panel || overlay != Overlay.NONE }, onReveal = { panel = true },
+                onAnyKey = { lastKey = System.currentTimeMillis() })
             .focusRequester(rootFocus).focusable(),
     ) {
-        AndroidView(
-            factory = { c ->
-                PlayerView(c).apply {
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
-                    keepScreenOn = true
-                    isFocusable = false
-                    layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    player = controller.player
-                }
-            },
-            onRelease = { it.player = null },
-            modifier = Modifier.fillMaxSize(),
-        )
+        VideoSurface(s, poster = false)
 
         // Status (loading / reconnect / offline)
-        val st = controller.status
-        if (st != PlayStatus.PLAYING && st != PlayStatus.IDLE) {
+        statusMessage(s)?.let { msg ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    when (st) { PlayStatus.OFFLINE -> "${item.displayName}: трансляция не идёт"; else -> controller.statusText.ifEmpty { "Загрузка…" } },
+                    msg,
                     color = Color.White, style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.background(Color(0xAA000000), RoundedCornerShape(8.dp)).padding(horizontal = 18.dp, vertical = 10.dp),
                 )
@@ -187,41 +135,36 @@ fun PlayerScreen(prefs: Prefs, start: StreamItem, list: List<StreamItem>, onExit
             Text(controller.adState, color = Color.White, fontSize = 13.sp,
                 modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).background(Color(0x99000000), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
         }
-        toast?.let {
+        s.toast?.let {
             Text(it, color = Color.White, style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.align(Alignment.TopCenter).padding(24.dp).background(Color(0xAA000000), RoundedCornerShape(8.dp)).padding(horizontal = 16.dp, vertical = 8.dp))
         }
-        if (diagOn) DiagnosticsBox(controller, Modifier.align(Alignment.TopStart).padding(16.dp))
-        if (chatOn) ChatPanel(chat, Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(340.dp))
+        if (s.diagOn) DiagnosticsBox(s, Modifier.align(Alignment.TopStart).padding(16.dp))
+        if (s.chatOn) ChatPanel(chat, Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(340.dp))
 
         if (panel) {
             ControlPanel(
-                controller = controller, item = item, prefs = prefs, chatOn = chatOn, diagOn = diagOn, favVer = favVer,
+                controller = controller, item = item, prefs = s.prefs, chatOn = s.chatOn, diagOn = s.diagOn, favVer = s.favVersion,
                 firstFocus = panelFocus,
                 onQuality = { overlay = Overlay.QUALITY },
                 onStreams = { overlay = Overlay.STREAMS },
-                onChat = { chatOn = !chatOn; if (chatOn) chat.connect(item.login) else chat.disconnect() },
-                onDiag = { diagOn = !diagOn },
-                onFav = { val now = prefs.toggleFavorite(item.login); HomeCache.data.remove(0); favVer++; toast = if (now) "Добавлено в избранное" else "Убрано из избранного" },
-                onLive = { controller.resumeLive() },
-                onExport = { toast = exportLogs(ctx, prefs, controller.diag.asText()) },
+                onChat = { s.toggleChat() },
+                onDiag = { s.toggleDiag() },
+                onFav = { s.toggleFavorite() },
+                onLive = { s.resumeLive() },
+                onExport = { s.exportLog(ctx) },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
         when (overlay) {
             Overlay.QUALITY -> QualityPicker(controller, Modifier.align(Alignment.CenterEnd)) { overlay = Overlay.NONE; panel = false; rootFocus.requestFocus() }
             Overlay.STREAMS -> StreamPicker(list, item, Modifier.align(Alignment.BottomCenter)) {
-                overlay = Overlay.NONE; panel = false; switchTo(it); rootFocus.requestFocus()
+                overlay = Overlay.NONE; panel = false; s.switchTo(it); rootFocus.requestFocus()
             }
             Overlay.NONE -> {}
         }
     }
 }
-
-private val OPEN_KEYS = setOf(
-    AKeyEvent.KEYCODE_DPAD_CENTER, AKeyEvent.KEYCODE_ENTER, AKeyEvent.KEYCODE_NUMPAD_ENTER, AKeyEvent.KEYCODE_MENU,
-    AKeyEvent.KEYCODE_DPAD_UP, AKeyEvent.KEYCODE_DPAD_DOWN, AKeyEvent.KEYCODE_DPAD_LEFT, AKeyEvent.KEYCODE_DPAD_RIGHT, AKeyEvent.KEYCODE_INFO,
-)
 
 @UnstableApi
 @Composable
@@ -328,11 +271,9 @@ private fun StreamPicker(list: List<StreamItem>, current: StreamItem, modifier: 
 
 @UnstableApi
 @Composable
-private fun DiagnosticsBox(c: PlaybackController, modifier: Modifier) {
-    val d = c.diag
+private fun DiagnosticsBox(s: PlayerSession, modifier: Modifier) {
     // Values are read from Compose state updated once per second by the controller's watchdog.
-    val text = d.asText() + (c.current?.let { "Вариант: ${it.label} ${it.codecLabel} (${it.bandwidth / 1000} кбит/с)\n" } ?: "") +
-        (c.autoCapLabel?.let { "Авто ограничило до: $it\n" } ?: "")
+    val text = s.diagText()
     Text(text, color = Color(0xFFB9F6CA), fontSize = 12.sp, fontFamily = FontFamily.Monospace,
         modifier = modifier.background(Color(0xB3000000), RoundedCornerShape(6.dp)).padding(10.dp))
 }

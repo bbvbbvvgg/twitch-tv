@@ -1,4 +1,4 @@
-package su.expensive.twitchtv.ui
+package su.expensive.twitchtv.ui.classic
 
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.foundation.BorderStroke
@@ -66,19 +66,24 @@ import kotlinx.coroutines.withContext
 import su.expensive.twitchtv.data.Prefs
 import su.expensive.twitchtv.data.StreamItem
 import su.expensive.twitchtv.data.TwitchApi
+import su.expensive.twitchtv.ui.core.AppState
+import su.expensive.twitchtv.ui.core.Load
+import su.expensive.twitchtv.ui.core.StreamRepo
+import su.expensive.twitchtv.ui.core.formatViewers
+import su.expensive.twitchtv.ui.core.rememberStreams
+import androidx.media3.common.util.UnstableApi
 
 private val TABS = listOf("Избранное", "Популярное", "GTA VI", "Поиск", "История", "Настройки")
 
-/** Lists survive Home ⇄ Player round trips so "Back" is instant. */
+/** Focus memory: the card that opened the player gets focus back on return. */
 object HomeCache {
-    val data = HashMap<Int, Pair<Long, List<StreamItem>>>()
-    var gtaTitle: String = "Grand Theft Auto VI"
     var lastLogin: String? = null
-    var searchQuery: String = ""
 }
 
+@UnstableApi
 @Composable
-fun HomeScreen(prefs: Prefs, initialTab: Int, onTabChanged: (Int) -> Unit, onOpen: (StreamItem, List<StreamItem>) -> Unit) {
+fun HomeScreen(app: AppState, initialTab: Int, onTabChanged: (Int) -> Unit, onOpen: (StreamItem, List<StreamItem>) -> Unit) {
+    val prefs = app.prefs
     var tab by remember { mutableIntStateOf(initialTab) }
     // Focus moves the tab only after the user pressed a key: automatic initial focus (which
     // lands on the first tab) must not switch the screen away from the chosen start tab.
@@ -104,22 +109,13 @@ fun HomeScreen(prefs: Prefs, initialTab: Int, onTabChanged: (Int) -> Unit, onOpe
         Spacer(Modifier.height(20.dp))
         Box(Modifier.fillMaxSize()) {
             when (tab) {
-                0 -> StreamTab(0, prefs, onOpen, empty = "Добавьте стримера: удерживайте OK на карточке") {
-                    TwitchApi.channels(prefs.favorites()).sortedWith(compareByDescending<StreamItem> { it.live }.thenByDescending { it.viewers })
-                }
-                1 -> StreamTab(1, prefs, onOpen) { TwitchApi.topStreams(30) }
-                2 -> StreamTab(2, prefs, onOpen, header = { HomeCache.gtaTitle }) {
-                    val cat = TwitchApi.findCategory(TwitchApi.GTA6_NAME) ?: error("Категория GTA VI не найдена")
-                    HomeCache.gtaTitle = "${cat.name} · ${formatViewers(cat.viewers)} зрителей"
-                    TwitchApi.categoryStreams(cat.id, 30)
-                }
+                0 -> StreamTab(StreamRepo.Key.FAVORITES, prefs, onOpen, empty = "Добавьте стримера: удерживайте OK на карточке")
+                1 -> StreamTab(StreamRepo.Key.POPULAR, prefs, onOpen)
+                2 -> StreamTab(StreamRepo.Key.GTA, prefs, onOpen, header = {
+                    if (StreamRepo.gtaViewers > 0) "${StreamRepo.gtaTitle} · ${formatViewers(StreamRepo.gtaViewers)} зрителей" else StreamRepo.gtaTitle })
                 3 -> SearchTab(prefs, onOpen)
-                4 -> StreamTab(4, prefs, onOpen, empty = "История пуста") {
-                    val order = prefs.history()
-                    val res = TwitchApi.channels(order).associateBy { it.login.lowercase() }
-                    order.mapNotNull { res[it] }
-                }
-                5 -> SettingsScreen(prefs)
+                4 -> StreamTab(StreamRepo.Key.HISTORY, prefs, onOpen, empty = "История пуста")
+                5 -> SettingsScreen(app)
             }
         }
     }
@@ -127,33 +123,21 @@ fun HomeScreen(prefs: Prefs, initialTab: Int, onTabChanged: (Int) -> Unit, onOpe
 
 @Composable
 private fun StreamTab(
-    key: Int,
+    key: StreamRepo.Key,
     prefs: Prefs,
     onOpen: (StreamItem, List<StreamItem>) -> Unit,
     empty: String = "Нет трансляций",
     header: (() -> String)? = null,
-    load: suspend () -> List<StreamItem>,
 ) {
-    val cached = HomeCache.data[key]
-    var items by remember(key) { mutableStateOf(cached?.second) }
-    var error by remember(key) { mutableStateOf<String?>(null) }
+    val h = rememberStreams(key, prefs)
     var favVersion by remember { mutableIntStateOf(0) }
-    LaunchedEffect(key) {
-        val fresh = cached != null && System.currentTimeMillis() - cached.first < 60_000 && key != 0
-        if (fresh) return@LaunchedEffect
-        error = null
-        runCatching { withContext(Dispatchers.IO) { load() } }
-            .onSuccess { items = it; HomeCache.data[key] = System.currentTimeMillis() to it }
-            .onFailure { if (items == null) error = "Не удалось загрузить: ${it.message ?: "сеть"}. Проверьте Happ/интернет." }
-    }
     Column {
         header?.let { Text(it(), style = MaterialTheme.typography.titleMedium, color = Palette.dim, modifier = Modifier.padding(bottom = 12.dp)) }
-        val list = items
-        when {
-            error != null -> Message(error!!)
-            list == null -> Message("Загрузка…")
-            list.isEmpty() -> Message(empty)
-            else -> StreamGrid(list, prefs, favVersion, onToggleFav = { favVersion++ }, onOpen = { onOpen(it, list.filter { s -> s.live }) })
+        when (val st = h.state) {
+            is Load.Failed -> Message(st.message)
+            Load.Loading -> Message("Загрузка…")
+            is Load.Ready -> if (st.items.isEmpty()) Message(empty)
+                else StreamGrid(st.items, prefs, favVersion, onToggleFav = { favVersion++ }, onOpen = { onOpen(it, st.items.filter { s -> s.live }) })
         }
     }
 }
@@ -175,7 +159,7 @@ fun StreamGrid(list: List<StreamItem>, prefs: Prefs, favVersion: Int, onToggleFa
     ) {
         items(list, key = { it.login }) { s ->
             StreamCard(s, prefs.isFavorite(s.login).also { favVersion }, onClick = { HomeCache.lastLogin = s.login; onOpen(s) },
-                onLongClick = { prefs.toggleFavorite(s.login); HomeCache.data.remove(0); onToggleFav() })
+                onLongClick = { prefs.toggleFavorite(s.login); StreamRepo.invalidate(StreamRepo.Key.FAVORITES); onToggleFav() })
         }
     }
 }
@@ -228,8 +212,8 @@ fun StreamCard(s: StreamItem, favorite: Boolean, onClick: () -> Unit, onLongClic
 
 @Composable
 private fun SearchTab(prefs: Prefs, onOpen: (StreamItem, List<StreamItem>) -> Unit) {
-    var query by remember { mutableStateOf(HomeCache.searchQuery) }
-    var results by remember { mutableStateOf<List<StreamItem>?>(HomeCache.data[3]?.second) }
+    var query by remember { mutableStateOf(StreamRepo.searchQuery) }
+    var results by remember { mutableStateOf<List<StreamItem>?>(StreamRepo.cached("SEARCH:" + StreamRepo.searchQuery)) }
     var error by remember { mutableStateOf<String?>(null) }
     var favVersion by remember { mutableIntStateOf(0) }
     var editFocused by remember { mutableStateOf(false) }
@@ -237,12 +221,12 @@ private fun SearchTab(prefs: Prefs, onOpen: (StreamItem, List<StreamItem>) -> Un
     fun run(q: String) = scope.launch {
         if (q.isBlank()) return@launch
         error = null
-        runCatching { withContext(Dispatchers.IO) { TwitchApi.search(q.trim()) } }
-            .onSuccess { results = it; HomeCache.data[3] = System.currentTimeMillis() to it }
+        runCatching { withContext(Dispatchers.IO) { StreamRepo.load(StreamRepo.Key.SEARCH, prefs, q.trim()) } }
+            .onSuccess { results = it }
             .onFailure { error = "Поиск не удался: ${it.message}" }
     }
     LaunchedEffect(query) {
-        HomeCache.searchQuery = query
+        StreamRepo.searchQuery = query
         if (query.length >= 2) { delay(600); run(query) }
     }
     Column {
@@ -279,3 +263,24 @@ private fun SearchTab(prefs: Prefs, onOpen: (StreamItem, List<StreamItem>) -> Un
 
 @Suppress("unused")
 private val vignette = Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000)))
+
+/** Classic root: Home ⇄ full-screen Player. Back from the player returns to the same tab/focus. */
+@UnstableApi
+@Composable
+fun ClassicApp(app: AppState) {
+    val s = app.session
+    var tab by androidx.compose.runtime.saveable.rememberSaveable {
+        mutableIntStateOf(if (app.openSettingsOnce) 5 else if (app.prefs.favorites().isNotEmpty()) 0 else 1)
+    }
+    TvTheme {
+        Box(Modifier.fillMaxSize().background(Palette.bg)) {
+            if (s == null) {
+                HomeScreen(app, initialTab = tab, onTabChanged = { tab = it }, onOpen = { item, list -> app.open(item, list) })
+            } else {
+                androidx.activity.compose.BackHandler { app.close() }
+                PlayerScreen(s)
+            }
+        }
+    }
+    LaunchedEffect(Unit) { app.openSettingsOnce = false }
+}

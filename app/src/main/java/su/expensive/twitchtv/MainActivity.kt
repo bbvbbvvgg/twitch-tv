@@ -2,54 +2,49 @@ package su.expensive.twitchtv
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.runtime.key
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.util.UnstableApi
-import su.expensive.twitchtv.data.StreamItem
-import su.expensive.twitchtv.ui.HomeScreen
-import su.expensive.twitchtv.ui.Palette
-import su.expensive.twitchtv.ui.PlayerScreen
-import su.expensive.twitchtv.ui.TvTheme
+import su.expensive.twitchtv.ui.classic.ClassicApp
+import su.expensive.twitchtv.ui.core.AppState
+import su.expensive.twitchtv.ui.core.Design
+import su.expensive.twitchtv.ui.glass.GlassApp
+import su.expensive.twitchtv.ui.gtv.GtvApp
+import su.expensive.twitchtv.ui.vice.ViceApp
 
-/** Simple two-level navigation: Home ⇄ full-screen Player. Back from the player returns to the same tab/focus. */
+/**
+ * Hosts exactly one design tree at a time. The shared [AppState] (player session, settings,
+ * caches) outlives a design switch, so the stream keeps playing and nothing is reset; the old
+ * design's composition is disposed as a whole (key(design)), which releases its views and state.
+ */
 @UnstableApi
 class MainActivity : ComponentActivity() {
+    lateinit var app: AppState
+        private set
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prefs = (application as App).prefs
+        app = AppState(applicationContext, (application as App).prefs)
+        lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) { app.onStart() }
+            override fun onStop(owner: LifecycleOwner) { app.onStop() }
+        })
         setContent {
-            TvTheme {
-                var playing by remember { mutableStateOf<Pair<StreamItem, List<StreamItem>>?>(null) }
-                var tab by rememberSaveable { mutableStateOf(if (prefs.favorites().isNotEmpty()) 0 else 1) }
-                Box(Modifier.fillMaxSize().background(Palette.bg)) {
-                    val p = playing
-                    if (p == null) {
-                        HomeScreen(
-                            prefs = prefs,
-                            initialTab = tab,
-                            onTabChanged = { tab = it },
-                            onOpen = { item, list -> prefs.addHistory(item.login); playing = item to list },
-                        )
-                    } else {
-                        BackHandler { playing = null }
-                        PlayerScreen(
-                            prefs = prefs,
-                            start = p.first,
-                            list = p.second,
-                            onExit = { playing = null },
-                        )
-                    }
+            key(app.design) {
+                when (app.design) {
+                    Design.CLASSIC -> ClassicApp(app)
+                    Design.GLASS -> GlassApp(app)
+                    Design.GTV -> GtvApp(app)
+                    Design.VICE -> ViceApp(app)
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        app.release()
+        super.onDestroy()
     }
 }

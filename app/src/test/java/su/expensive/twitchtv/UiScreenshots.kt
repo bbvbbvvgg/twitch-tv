@@ -44,8 +44,11 @@ class UiScreenshots {
     }
 
     private fun shot(name: String) = runCatching {
-        val bmp = rule.onRoot().captureToImage().asAndroidBitmap()
-        File(out, "ui-$name.png").outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        rule.waitForIdle()
+        val v = rule.activity.window.decorView
+        val bmp = android.graphics.Bitmap.createBitmap(v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { v.draw(android.graphics.Canvas(bmp)) }
+        File(out, "classic-baseline-$name.png").outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }.onFailure { println("screenshot $name failed: $it") }
 
     private fun waitText(t: String, ms: Long = 30_000) {

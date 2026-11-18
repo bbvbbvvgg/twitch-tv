@@ -13,8 +13,8 @@ android {
         applicationId = "su.expensive.twitchtv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1-test"
+        versionCode = 3
+        versionName = "2.0.0"
         resourceConfigurations += listOf("ru", "en")
     }
 
@@ -53,7 +53,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        freeCompilerArgs += listOf(
+            "-opt-in=androidx.compose.ui.ExperimentalComposeUiApi",
+            "-opt-in=androidx.compose.ui.text.ExperimentalTextApi",
+            "-opt-in=androidx.tv.material3.ExperimentalTvMaterial3Api",
+        )
+    }
     buildFeatures { compose = true; buildConfig = true }
     testOptions {
         unitTests.isIncludeAndroidResources = true
@@ -61,7 +68,10 @@ android {
             t.systemProperty("live", System.getProperty("live") ?: "false")
             t.systemProperty("shots", System.getProperty("shots") ?: "false")
             // Screenshots need Robolectric's native graphics (x86_64/macOS only); opt-in with -Dshots=true.
-            if (System.getProperty("shots") != "true") t.exclude("**/UiScreenshots*")
+            if (System.getProperty("shots") != "true") t.exclude("**/UiScreenshots*", "**/DesignScreenshots*")
+            // On aarch64 Linux hosts, -PtestJvm=/path/to/x86_64-java (e.g. via qemu-user) lets
+            // Robolectric's native graphics run. See docs/SCREENSHOTS.md.
+            (project.findProperty("testJvm") as String?)?.let { t.executable = it }
             t.systemProperty("liveOut", rootProject.file("test-report/live-report.txt").absolutePath)
             t.testLogging { events("passed", "failed", "skipped"); showStandardStreams = true }
         }
@@ -80,6 +90,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.tv:tv-material:1.0.0")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 

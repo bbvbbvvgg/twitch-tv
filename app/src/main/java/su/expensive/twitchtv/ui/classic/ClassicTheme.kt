@@ -1,4 +1,4 @@
-package su.expensive.twitchtv.ui
+package su.expensive.twitchtv.ui.classic
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -43,8 +43,3 @@ fun TvTheme(content: @Composable () -> Unit) {
     )
 }
 
-fun formatViewers(n: Int): String = when {
-    n >= 1_000_000 -> "%.1f млн".format(n / 1_000_000.0)
-    n >= 1_000 -> "%.1f тыс.".format(n / 1_000.0)
-    else -> n.toString()
-}

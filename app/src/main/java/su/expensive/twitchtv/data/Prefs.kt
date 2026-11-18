@@ -52,6 +52,12 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("diag", false)
         set(v) = sp.edit().putBoolean("diag", v).apply()
 
+    /** Selected interface design; stored by name so reordering the enum never changes a user's choice. */
+    var design: su.expensive.twitchtv.ui.core.Design
+        get() = runCatching { su.expensive.twitchtv.ui.core.Design.valueOf(sp.getString("design", "CLASSIC")!!) }
+            .getOrDefault(su.expensive.twitchtv.ui.core.Design.CLASSIC)
+        set(v) = sp.edit().putString("design", v.name).apply()
+
     // ---- favorites ----
     fun favorites(): List<String> = readList("fav")
     fun isFavorite(login: String) = favorites().contains(login.lowercase())
@@ -77,5 +83,5 @@ class Prefs(context: Context) {
 
     fun dumpSettings(): String = JSONObject()
         .put("adBlock", adBlock).put("autoQuality", autoQuality).put("defaultQuality", defaultQuality.name)
-        .put("bufferMode", bufferMode.name).put("allowHevc", allowHevc).put("chat", chatEnabled).toString()
+        .put("bufferMode", bufferMode.name).put("allowHevc", allowHevc).put("chat", chatEnabled).put("design", design.name).toString()
 }
