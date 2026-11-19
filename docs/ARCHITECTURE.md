@@ -49,3 +49,22 @@ Every design: D-pad moves focus, OK activates, long-press OK toggles favourite o
 Back goes one level up (overlay → controls → home), CH+/CH− switch channel in the player,
 Play/Pause returns to the live edge, Menu/Info reveal player controls. Overlays that must keep
 focus (sheets, quality pickers, channel lists) trap it with `focusProperties { exit = Cancel }`.
+
+## Network layer (2.1)
+
+```
+net/NetSettings.kt       mode (DIRECT | REYOHOHO | CUSTOM), Reyohoho server, consent + its version,
+                         custom proxy (password sealed by data/SecretBox.kt, Android Keystore AES-GCM)
+net/Reyohoho.kt          server list proxy4/7/5/6.rte.net.ru, CONSENT_VERSION, master URL builder (no token in URL)
+net/ConnectionEngine.kt  fetchMaster(): direct, or ≤2 Reyohoho servers per call, one anonymous retry after a
+                         403 with token, 5-min cooldown per failed server, then fallback to direct. No loops.
+net/Connection.kt        singleton wiring (App.kt); forgets the in-memory token on account change
+net/NetCheck.kt          one-shot "check connection" on lofigirl, never with a token
+data/Net.kt              OkHttp clients: http (direct), proxyApi (custom proxy for gql/usher), segments always direct
+```
+
+The four designs only render `SettingsModel` items of group «Сеть и прокси»; every design changes the mode
+through `SettingsModel.chooseMode()`, which raises the consent modal before Reyohoho can be selected.
+`PlaybackController.resolvePrimary()` asks the engine for the master playlist; media playlists and segments
+keep the 2.0 path (ad filter, EXT-X-MAP, HEVC), so the player does not know which route was used except for
+diagnostics (`netMode`, `route`, `fallback`, `netError`, `maxOffered`).
