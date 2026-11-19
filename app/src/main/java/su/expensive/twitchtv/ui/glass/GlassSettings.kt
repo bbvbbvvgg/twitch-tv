@@ -73,6 +73,8 @@ private sealed interface Sheet {
     data object Account : Sheet
     data object Design : Sheet
     data class Pick(val s: Setting.Choice) : Sheet
+    data object Mode : Sheet
+    data object Proxy : Sheet
 }
 
 /**
@@ -84,11 +86,11 @@ private sealed interface Sheet {
 @Composable
 fun GlassSettings(app: AppState) {
     val m = app.settings
-    var sheet by remember { mutableStateOf<Sheet?>(if (app.openSettingsOnce) Sheet.Design else null) }
+    var sheet by remember { mutableStateOf<Sheet?>(if (app.openSettingsOnce && !app.openNetworkOnce) Sheet.Design else null) }
     val rowFocus = remember { HashMap<String, FocusRequester>() }
     var opener by remember { mutableStateOf("design") }
     fun close() { sheet = null }
-    LaunchedEffect(sheet) { if (sheet == null) { delay(80); runCatching { rowFocus[opener]?.requestFocus() } } }
+    LaunchedEffect(sheet, m.consentAsk) { if (sheet == null && !m.consentAsk) { delay(80); runCatching { rowFocus[opener]?.requestFocus() } } }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.fillMaxWidth(0.66f).align(Alignment.TopCenter),
@@ -109,9 +111,9 @@ fun GlassSettings(app: AppState) {
                                 opener = s.id
                                 when (s) {
                                     is Setting.Toggle -> s.flip()
-                                    is Setting.Choice -> sheet = Sheet.Pick(s)
+                                    is Setting.Choice -> sheet = if (s == m.connMode) Sheet.Mode else Sheet.Pick(s)
                                     is Setting.Action -> s.run()
-                                    is Setting.Screen -> sheet = if (s == m.account) Sheet.Account else Sheet.Design
+                                    is Setting.Screen -> sheet = when (s) { m.account -> Sheet.Account; m.proxy -> Sheet.Proxy; else -> Sheet.Design }
                                 }
                             }
                         }
@@ -143,11 +145,14 @@ fun GlassSettings(app: AppState) {
                     Sheet.Account -> AccountSheet(app) { close() }
                     Sheet.Design -> DesignSheet(app)
                     is Sheet.Pick -> PickSheet(sh.s) { close() }
+                    Sheet.Mode -> GlassModeSheet(m) { close() }
+                    Sheet.Proxy -> GlassProxySheet(m) { close() }
                     null -> {}
                 }
             }
         }
         if (open != null) BackHandler { close() }
+        if (m.consentAsk) GlassConsent(m)
     }
 }
 

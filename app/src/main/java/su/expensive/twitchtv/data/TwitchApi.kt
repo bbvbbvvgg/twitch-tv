@@ -46,7 +46,7 @@ object TwitchApi {
     class AuthRejectedException : IOException("GQL: токен отклонён")
 
     @Throws(IOException::class)
-    private fun gql(body: String, devId: String = deviceId, oauth: String? = null): JSONObject {
+    private fun gql(body: String, devId: String = deviceId, oauth: String? = null, via: okhttp3.OkHttpClient = Net.http): JSONObject {
         val req = Request.Builder().url(GQL)
             // A user token is only valid together with the client id it was issued to.
             .header("Client-ID", if (oauth != null) TwitchAuth.TV_CLIENT_ID else CLIENT_ID)
@@ -54,7 +54,7 @@ object TwitchApi {
             .apply { if (oauth != null) header("Authorization", "OAuth $oauth") }
             .post(body.toRequestBody(JSON))
             .build()
-        Net.http.newCall(req).execute().use { r ->
+        via.newCall(req).execute().use { r ->
             val txt = r.body?.string() ?: ""
             if (oauth != null && r.code == 401) throw AuthRejectedException()
             if (!r.isSuccessful) throw IOException("GQL HTTP ${r.code}")
@@ -174,7 +174,8 @@ object TwitchApi {
      * preroll ads for anonymous viewers, "autoplay" (android) is a 360p-only clean fallback.
      */
     @Throws(IOException::class)
-    fun playbackToken(login: String, playerType: String, devId: String = deviceId, oauth: String? = null): PlaybackToken {
+    fun playbackToken(login: String, playerType: String, devId: String = deviceId, oauth: String? = null,
+                      via: okhttp3.OkHttpClient = Net.http): PlaybackToken {
         val platform = if (playerType == "autoplay") "android" else "web"
         val body = JSONObject()
             .put("operationName", "PlaybackAccessToken")
@@ -183,7 +184,7 @@ object TwitchApi {
                 .put("playerType", playerType).put("platform", platform))
             .put("extensions", JSONObject().put("persistedQuery",
                 JSONObject().put("version", 1).put("sha256Hash", TOKEN_HASH)))
-        val t = gql(body.toString(), devId, oauth).optJSONObject("data")?.optJSONObject("streamPlaybackAccessToken")
+        val t = gql(body.toString(), devId, oauth, via).optJSONObject("data")?.optJSONObject("streamPlaybackAccessToken")
             ?: throw IOException("Нет токена воспроизведения (канал не найден?)")
         return PlaybackToken(t.getString("value"), t.getString("signature"))
     }

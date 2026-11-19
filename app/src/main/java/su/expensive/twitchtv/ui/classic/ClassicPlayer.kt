@@ -76,6 +76,8 @@ import su.expensive.twitchtv.data.StreamItem
 import su.expensive.twitchtv.player.PlayStatus
 import su.expensive.twitchtv.player.PlaybackController
 import su.expensive.twitchtv.player.QualityChoice
+import su.expensive.twitchtv.ui.core.connectionLine
+import su.expensive.twitchtv.ui.core.proxyRetryLabel
 import su.expensive.twitchtv.ui.core.PlayerSession
 import su.expensive.twitchtv.ui.core.ToastTimer
 import su.expensive.twitchtv.ui.core.VideoSurface
@@ -222,6 +224,7 @@ private fun QualityPicker(controller: PlaybackController, modifier: Modifier, on
     val fr = remember { FocusRequester() }
     Column(modifier.fillMaxHeight().width(360.dp).background(Color(0xF0101014)).padding(24.dp)) {
         Text("Качество", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+        Text(connectionLine(controller), style = MaterialTheme.typography.bodySmall, color = Palette.dim, modifier = Modifier.padding(top = 4.dp))
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
@@ -235,6 +238,9 @@ private fun QualityPicker(controller: PlaybackController, modifier: Modifier, on
                 PickRow("${v.label}  ${v.codecLabel}  ${"%.1f".format(v.bandwidth / 1_000_000.0)} Мбит/с" + if (v.isSource) "  · источник" else "", sel) {
                     controller.selectQuality(QualityChoice(v.height, v.fpsRounded, v.isHevc)); onDone()
                 }
+            }
+            proxyRetryLabel(controller)?.let { label ->
+                item { PickRow(label, false) { controller.retryViaReyohoho() } }
             }
         }
     }

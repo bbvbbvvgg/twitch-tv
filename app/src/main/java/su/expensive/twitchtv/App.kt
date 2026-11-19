@@ -18,6 +18,7 @@ class App : Application(), ImageLoaderFactory {
         Net.init(this)
         prefs = Prefs(this)
         Account.init(this)
+        su.expensive.twitchtv.net.Connection.init(this)
     }
 
     /** Small, bounded image caches: TVs often have 1–2 GB RAM. */

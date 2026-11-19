@@ -36,6 +36,8 @@ class AppState(private val context: Context, val prefs: Prefs) {
 
     /** Set when the design was just changed from Settings: the new design opens on its Settings screen. */
     var openSettingsOnce by mutableStateOf(false)
+    /** With [openSettingsOnce]: land on the «Сеть и прокси» section instead of the design picker. */
+    var openNetworkOnce by mutableStateOf(false)
 
     val settings = SettingsModel(context, prefs, this)
 

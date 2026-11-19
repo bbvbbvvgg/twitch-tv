@@ -15,7 +15,10 @@ object DiagLog {
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     private val secretPatterns = listOf(
-        Regex("""(?i)(sig|token|nauth|nauthsig|signature|access_token|oauth)=([^&\s"]+)""") to "$1=<скрыто>",
+        Regex("""(?i)\b(sig|token|nauth|nauthsig|signature|access_token|oauth|auth|password|pass)=([^&\s"]+)""") to "$1=<скрыто>",
+        // ReYohoho token header and proxy credentials (Proxy-Authorization / user:pass@host).
+        Regex("""(?i)(x-auth-token|proxy-authorization)\s*[:=]\s*(?:Basic\s+)?\S+""") to "$1: <скрыто>",
+        Regex("""(?i)\b(https?|socks5?)://[^\s/:@]+:[^\s/@]+@""") to "$1://<скрыто>@",
         Regex("""(?i)(authorization|client-integrity)\s*[:=]\s*(?:(?:OAuth|Bearer)\s+)?\S+""") to "$1: <скрыто>",
         Regex("""(?i)\b(OAuth|Bearer)\s+[a-z0-9]{20,}""") to "$1 <скрыто>",
         Regex("""(?i)"(access_token|refresh_token|device_code)"\s*:\s*"[^"]*"""") to "\"$1\":\"<скрыто>\"",

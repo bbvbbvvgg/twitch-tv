@@ -111,7 +111,7 @@ fun GlassApp(app: AppState) {
             GlassPlayer(app, s)
         }
     }
-    LaunchedEffect(Unit) { app.openSettingsOnce = false }
+    LaunchedEffect(Unit) { app.openSettingsOnce = false; app.openNetworkOnce = false }
 }
 
 @UnstableApi

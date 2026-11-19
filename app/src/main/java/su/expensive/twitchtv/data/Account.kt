@@ -29,6 +29,7 @@ object Account {
         store.save(t, userLogin); cached = t; login = userLogin
         lastValidatedAt = System.currentTimeMillis()
         DiagLog.log("Вход в Twitch выполнен: $userLogin")
+        su.expensive.twitchtv.net.Connection.onAccountChanged()
     }
 
     fun signOut(revoke: Boolean = true) {
@@ -36,6 +37,8 @@ object Account {
         cached = null; login = null; store.clear()
         if (revoke && t != null) Thread { TwitchAuth.revoke(t.access) }.start()
         DiagLog.log("Выход из Twitch")
+        // The old token is gone from memory and disk; nothing (proxy included) can send it now.
+        su.expensive.twitchtv.net.Connection.onAccountChanged()
     }
 
     /**

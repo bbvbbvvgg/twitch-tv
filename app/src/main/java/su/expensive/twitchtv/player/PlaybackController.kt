@@ -44,6 +44,10 @@ import su.expensive.twitchtv.data.Account
 import su.expensive.twitchtv.data.AdFilter
 import su.expensive.twitchtv.data.BufferMode
 import su.expensive.twitchtv.data.Hls
+import su.expensive.twitchtv.data.HttpText
+import su.expensive.twitchtv.net.Connection
+import su.expensive.twitchtv.net.ConnectionMode
+import su.expensive.twitchtv.net.Route
 import su.expensive.twitchtv.data.Net
 import su.expensive.twitchtv.data.Prefs
 import su.expensive.twitchtv.data.TwitchApi
@@ -211,51 +215,148 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
         rebuffers.clear(); recoverTimes.clear(); backoffStep = 0
         hiResBroken = false; hiResGuard.reset()
         status = PlayStatus.LOADING; statusText = "Загрузка…"
+        proxyRetryNote = null; proxyRetrying = false
         diag.reset()
         DiagLog.log("Открываю $login (токен: $primaryType, VPN-интерфейс: ${isVpnActive()}, буфер: ${mode.name})")
         openJob = scope.launch { resolveAndPlay(initial = true) }
         startWatchdog()
     }
 
-    private suspend fun resolvePrimary(): List<Variant> = withContext(Dispatchers.IO) {
+    /**
+     * Master playlist for the primary stream through the connection the user chose
+     * (see [su.expensive.twitchtv.net.ConnectionEngine]). Only this request and the
+     * PlaybackAccessToken change route; media playlists and segments always go to Twitch's CDN.
+     * @param modeOverride one-shot route for "try again via Reyohoho" without changing the setting.
+     */
+    private suspend fun resolvePrimary(modeOverride: ConnectionMode? = null): List<Variant> = withContext(Dispatchers.IO) {
         val codecs = DeviceCaps.usherCodecs(prefs.allowHevc && !hevcBroken)
+        val ns = Connection.settings
+        val mode = modeOverride ?: ns.mode
+        val custom = ns.customProxy
+        // Own proxy only when it is fully configured; otherwise the normal network.
+        var via = if (mode == ConnectionMode.CUSTOM && custom.isValid) Net.viaProxy(custom) else Net.http
+        var viaLabel = if (via === Net.http) Route.DIRECT else Route.CUSTOM
+        var fallback: String? = null
         // Signed-in viewers get >1080p renditions; backups for ad bypass stay anonymous.
         var oauth = Account.accessToken()
-        fun fetch(type: String): List<Variant> {
-            val tok = try {
-                TwitchApi.playbackToken(login, type, oauth = oauth)
-            } catch (e: TwitchApi.AuthRejectedException) {
-                oauth = Account.accessToken(forceRefresh = true)
-                if (oauth != null) TwitchApi.playbackToken(login, type, oauth = oauth)
-                else TwitchApi.playbackToken(login, type)
-            }
-            val r = Net.getText(TwitchApi.usherUrl(login, tok, codecs))
-            return when {
-                r.ok -> {
-                    val info = Hls.twitchInfo(r.body)
-                    val country = info["USER-COUNTRY"]
-                    if (country != diag.twitchCountry) DiagLog.log("Twitch определил страну запроса: ${country ?: "нет данных"}")
-                    diag.twitchCountry = country
-                    Hls.parseMultivariant(r.body)
-                }
-                r.code == 404 || r.code == 403 -> throw OfflineException()
-                else -> throw IOException("usher HTTP ${r.code}")
-            }
+        fun token(type: String) = try {
+            TwitchApi.playbackToken(login, type, oauth = oauth, via = via)
+        } catch (e: TwitchApi.AuthRejectedException) {
+            oauth = Account.accessToken(forceRefresh = true)
+            if (oauth != null) TwitchApi.playbackToken(login, type, oauth = oauth, via = via)
+            else TwitchApi.playbackToken(login, type, via = via)
         }
-        var list = fetch(primaryType)
+        fun directFetch(type: String): HttpText = try {
+            Net.getText(TwitchApi.usherUrl(login, token(type), codecs), via = via)
+        } catch (e: IOException) {
+            if (e is TwitchApi.AuthRejectedException || via === Net.http) throw e
+            // Own proxy unreachable: one controlled step back to the normal network, never a loop.
+            fallback = "свой прокси: ${e.javaClass.simpleName}"
+            DiagLog.log("Свой прокси не ответил (${e.javaClass.simpleName}) — прямое подключение")
+            via = Net.http; viaLabel = Route.DIRECT
+            Net.getText(TwitchApi.usherUrl(login, token(type), codecs))
+        }
+        var route = viaLabel
+        var server: String? = null
+        fun parse(r: HttpText): List<Variant> = when {
+            r.ok -> {
+                val info = Hls.twitchInfo(r.body)
+                val country = info["USER-COUNTRY"]
+                if (country != diag.twitchCountry) DiagLog.log("Twitch определил страну запроса: ${country ?: "нет данных"}")
+                diag.twitchCountry = country
+                Hls.parseMultivariant(r.body)
+            }
+            r.code == 404 || r.code == 403 -> throw OfflineException()
+            else -> throw IOException("usher HTTP ${r.code}")
+        }
+        var list: List<Variant>
+        if (mode == ConnectionMode.REYOHOHO) {
+            val res = Connection.engine.fetchMaster(login, codecs, direct = { directFetch(primaryType) },
+                oauth = { oauth }, modeOverride = mode)
+            route = if (res.route == Route.DIRECT) viaLabel else res.route
+            server = res.server
+            fallback = res.fallbackReason ?: fallback
+            if (res.tokenRejected) diag.proxyNote = "Reyohoho не принял токен этого приложения — без токена (≤1080p)"
+            list = parse(res.text)
+        } else {
+            list = parse(directFetch(primaryType))
+            route = viaLabel
+        }
+        val usedToken = oauth != null && (route == Route.DIRECT || route == Route.CUSTOM)
         // If the ad-friendly player type hides >1080p from a signed-in viewer, "site" is used instead
         // (Twitch documents that non-"site" player types may lose higher qualities).
-        if (oauth != null && primaryType != "site" && QualityPolicy.maxHeight(list) <= 1080) {
-            val site = runCatching { fetch("site") }.getOrNull()
+        if (usedToken && primaryType != "site" && QualityPolicy.maxHeight(list) <= 1080) {
+            val site = runCatching { parse(directFetch("site")) }.getOrNull()
             if (site != null && QualityPolicy.maxHeight(site) > 1080) {
                 DiagLog.log("$primaryType без >1080p, site с ${QualityPolicy.maxHeight(site)}p — основной токен site")
                 primaryType = "site"; list = site
             }
         }
         diag.account = Account.login?.takeIf { oauth != null }?.let { "вход: $it" } ?: "аноним"
+        diag.netMode = mode.title + if (modeOverride != null) " (разово)" else ""
+        diag.route = route.title + (server?.let { " · $it" } ?: "")
+        diag.fallback = fallback
+        diag.proxyOk = when (mode) {
+            ConnectionMode.REYOHOHO -> route == Route.REYOHOHO_AUTH || route == Route.REYOHOHO_ANON
+            ConnectionMode.CUSTOM -> route == Route.CUSTOM
+            ConnectionMode.DIRECT -> null
+        }
+        if (fallback != null) diag.netError = fallback
         diag.offered = Hls.sortVideo(list).joinToString(" ") { "${it.label}/${it.codecLabel}" }
-        DiagLog.log("Usher ($primaryType, ${diag.account}, codecs=$codecs): ${diag.offered}")
+        diag.maxOffered = Hls.sortVideo(list).firstOrNull()?.label ?: "—"
+        lastRoute = route
+        DiagLog.log("Usher ($primaryType, ${diag.account}, маршрут: ${diag.route}, codecs=$codecs): ${diag.offered}")
         list
+    }
+
+    /** Route of the current primary master playlist. */
+    var lastRoute by mutableStateOf(Route.DIRECT); private set
+    /** One-shot "try via Reyohoho" is running for this stream. */
+    var proxyRetrying by mutableStateOf(false); private set
+    /** Result line of the last one-shot retry, for the quality panels. */
+    var proxyRetryNote by mutableStateOf<String?>(null); private set
+
+    /**
+     * Offered in the quality panel when the stream came without 1440p/1080p and the user has
+     * already agreed to ReYohoho. Fetches the master once through ReYohoho and switches only if it
+     * really lists a better rendition; the running stream keeps playing meanwhile.
+     */
+    val canRetryViaProxy: Boolean get() =
+        Connection.settings.reyohohoConsented && lastRoute != Route.REYOHOHO_AUTH && lastRoute != Route.REYOHOHO_ANON &&
+            !proxyRetrying && proxyRetryLogin != login && primaryVariants.isNotEmpty()
+    private var proxyRetryLogin: String? = null
+
+    fun retryViaReyohoho() {
+        if (!canRetryViaProxy) return
+        proxyRetrying = true; proxyRetryLogin = login
+        val before = primaryVariants.firstOrNull()
+        val forLogin = login
+        val saved = listOf(diag.netMode, diag.route, diag.offered, diag.maxOffered)
+        val savedFallback = diag.fallback; val savedOk = diag.proxyOk; val savedRoute = lastRoute
+        val savedCountry = diag.twitchCountry
+        scope.launch {
+            val list = withTimeoutOrNull(20_000) {
+                runCatching { playable(resolvePrimary(ConnectionMode.REYOHOHO)) }
+                    .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+            }
+            proxyRetrying = false
+            if (forLogin != login) return@launch
+            val best = list?.firstOrNull()
+            val better = best != null && (before == null || best.height > before.height ||
+                (best.height == before.height && best.fpsRounded > before.fpsRounded))
+            if (list != null && better && (lastRoute == Route.REYOHOHO_AUTH || lastRoute == Route.REYOHOHO_ANON)) {
+                proxyRetryNote = "Reyohoho: ${best!!.label}"
+                DiagLog.log("Разовый Reyohoho дал ${best.label} — переключаюсь")
+                primaryVariants = list; variants = list; autoCap = 0
+                startPrimary(pickVariant(list), checkAds = adBlockActive)
+            } else {
+                proxyRetryNote = if (list == null) "Reyohoho не ответил" else "Reyohoho не дал лучшего качества"
+                DiagLog.log("Разовый Reyohoho: ${proxyRetryNote} — остаюсь на текущем потоке")
+                // The running stream did not change: its own route stays in the diagnostics.
+                diag.netMode = saved[0]; diag.route = saved[1]; diag.offered = saved[2]; diag.maxOffered = saved[3]
+                diag.fallback = savedFallback; diag.proxyOk = savedOk; lastRoute = savedRoute; diag.twitchCountry = savedCountry
+            }
+        }
     }
 
     private class OfflineException : IOException("offline")
@@ -290,6 +391,7 @@ class PlaybackController(private val context: Context, private val prefs: Prefs)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             DiagLog.log("Ошибка получения потока: ${e.message}")
+            diag.netError = (e.message ?: e.javaClass.simpleName).take(120)
             scheduleRetry(e.message ?: "сеть")
         }
     }
@@ -800,6 +902,19 @@ class Diagnostics {
     var account by mutableStateOf("аноним")
     /** Every video rendition usher listed for the primary token, before device filtering. */
     var offered by mutableStateOf("")
+    /** Best rendition usher listed (before device filtering). */
+    var maxOffered by mutableStateOf("—")
+    /** Connection mode chosen in settings (or a one-shot override). */
+    var netMode by mutableStateOf("Прямое / системный VPN")
+    /** Where the master playlist really came from: прямое / свой прокси / Reyohoho + server. */
+    var route by mutableStateOf("—")
+    /** Proxy answered for this stream: true/false; null in direct mode (nothing to check). */
+    var proxyOk by mutableStateOf<Boolean?>(null)
+    /** Set when the chosen route failed and the app stepped back to the direct connection. */
+    var fallback by mutableStateOf<String?>(null)
+    /** Last network failure of the connection layer (no URLs with secrets, no tokens). */
+    var netError by mutableStateOf<String?>(null)
+    var proxyNote by mutableStateOf<String?>(null)
 
     private val window = ArrayDeque<Pair<Long, Long>>() // (time, bytes)
 
@@ -819,6 +934,7 @@ class Diagnostics {
         width = 0; height = 0; codec = null; decoder = null; formatFps = null; renderFps = null
         droppedFrames = 0; liveOffsetMs = null; actualBitrate = null; lastError = null
         rebuffers = 0; adBreaks = 0; adSegmentsStripped = 0; twitchCountry = null
+        maxOffered = "—"; route = "—"; proxyOk = null; fallback = null; proxyNote = null
         synchronized(window) { window.clear() }
     }
 
@@ -836,8 +952,16 @@ class Diagnostics {
         // Honest wording: a VPN interface on the app's network does not prove Happ sends Twitch
         // through the proxy (Happ's own rules may route these domains direct). The country Twitch
         // reports is measured, but only for the usher request, not for every video segment.
-        appendLine("VPN-интерфейс у приложения: ${if (vpn) "да" else "нет"}")
+        appendLine("Режим подключения: $netMode")
+        appendLine("Плейлист получен: $route")
+        appendLine("Прокси: ${when (proxyOk) { null -> "не используется"; true -> "отвечает"; false -> "недоступен" }}")
+        appendLine("Резервное прямое подключение: ${fallback?.let { "да — $it" } ?: "нет"}")
+        proxyNote?.let { appendLine(it) }
+        appendLine("VPN-интерфейс у приложения: ${if (vpn) "да (маршрут запросов Twitch не подтверждён)" else "нет"}")
         appendLine("Страна по данным Twitch (usher): ${twitchCountry ?: "нет данных"}")
+        appendLine("Максимум в плейлисте: $maxOffered")
+        appendLine("Видеосегменты: напрямую с CDN Twitch (через прокси не идут)")
+        appendLine("Последний сбой сети: ${netError ?: "нет"}")
         appendLine("Рекламных блоков обойдено: $adBreaks  вырезано сегментов: $adSegmentsStripped")
         appendLine("Ошибка: ${lastError ?: "нет"}")
     }

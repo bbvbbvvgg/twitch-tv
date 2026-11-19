@@ -16,6 +16,17 @@ import su.expensive.twitchtv.data.DefaultQuality
 import su.expensive.twitchtv.data.Prefs
 import su.expensive.twitchtv.player.DeviceCaps
 import su.expensive.twitchtv.player.DiagLog
+import su.expensive.twitchtv.net.Connection
+import su.expensive.twitchtv.net.ConnectionMode
+import su.expensive.twitchtv.net.CustomProxy
+import su.expensive.twitchtv.net.NetCheck
+import su.expensive.twitchtv.net.Reyohoho
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -70,6 +81,80 @@ class SettingsModel(private val ctx: Context, private val prefs: Prefs, private 
     val design = Setting.Screen("design", "Дизайн интерфейса",
         "Classic, Liquid Glass, Google TV или GTA VI — меняется сразу") { app.design.title }
 
+    // ---------------- Сеть и прокси (one engine for all four designs) ----------------
+    private val net get() = Connection.settings
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** True while a design must show the ReYohoho token warning. Nothing is sent before [acceptConsent]. */
+    var consentAsk by mutableStateOf(false); private set
+    var checkResult by mutableStateOf<String?>(null); private set
+    var checking by mutableStateOf(false); private set
+
+    val connMode = Setting.Choice("conn", "Режим подключения",
+        "Прямое работает и с Happ VPN. Reyohoho и свой прокси — только для плейлиста; видео идёт напрямую",
+        ConnectionMode.entries.map { it.title }, { net.mode.ordinal }) { chooseMode(ConnectionMode.entries[it]) }
+
+    /** Every design sets the mode through here, so the warning can never be skipped. */
+    fun chooseMode(mode: ConnectionMode) {
+        if (mode == ConnectionMode.REYOHOHO && !net.reyohohoConsented) { consentAsk = true; return }
+        if (mode == net.mode) return
+        net.mode = mode; checkResult = null
+        DiagLog.log("Режим подключения: ${mode.title}")
+        Connection.changed(); changed()
+    }
+
+    fun acceptConsent() {
+        net.grantReyohohoConsent()
+        net.mode = ConnectionMode.REYOHOHO
+        consentAsk = false; checkResult = null
+        DiagLog.log("Reyohoho: согласие дано, режим включён")
+        Connection.onAccountChanged(); changed()
+    }
+
+    /** «Отмена»: nothing changes, the previous mode stays. */
+    fun declineConsent() { consentAsk = false; DiagLog.log("Reyohoho: отказ, режим не изменён"); changed() }
+
+    val rteServer = Setting.Choice("rteServer", "Сервер Reyohoho", "Авто — первый ответивший; упавший сервер пропускается на 5 минут",
+        listOf("Авто") + Reyohoho.SERVERS.map { it.id },
+        { (Reyohoho.SERVERS.indexOfFirst { it.id == net.reyohohoServer } + 1).coerceAtLeast(0) }) {
+        net.reyohohoServer = if (it == 0) "auto" else Reyohoho.SERVERS[it - 1].id
+        Connection.onAccountChanged(); changed()
+    }
+
+    val rteToken = Setting.Toggle("rteToken", "Передавать токен Twitch в Reyohoho",
+        "Нужен для 1440p. Без токена — анонимно, обычно до 1080p60", { net.reyohohoSendToken }) {
+        net.reyohohoSendToken = it; Connection.changed(); changed()
+    }
+
+    val rteRevoke = Setting.Action("rteRevoke", "Отозвать согласие Reyohoho", "Режим сразу вернётся к прямому подключению",
+        { if (net.reyohohoConsented) "дано" else "не дано" }) {
+        if (net.reyohohoConsented) {
+            net.revokeReyohohoConsent(); DiagLog.log("Reyohoho: согласие отозвано")
+            checkResult = null; Connection.changed(); changed()
+        }
+    }
+
+    val proxy = Setting.Screen("proxy", "Свой прокси", "HTTP или SOCKS5 для gql.twitch.tv и usher.ttvnw.net") { net.customProxy.display }
+
+    val netCheck = Setting.Action("netcheck", "Проверить подключение", "Разовая проверка выбранного режима на канале lofigirl, без токена",
+        { if (checking) "проверяю…" else checkResult ?: "—" }) { runCheck() }
+
+    fun runCheck() {
+        if (checking) return
+        checking = true; changed()
+        ioScope.launch {
+            val r = withTimeoutOrNull(30_000) { withContext(Dispatchers.IO) { NetCheck.run() } } ?: "тайм-аут 30 с"
+            checkResult = r; checking = false; changed()
+        }
+    }
+
+    fun saveProxy(p: CustomProxy) { net.customProxy = p; checkResult = null; Connection.changed(); changed() }
+    fun clearProxy() {
+        net.clearCustomProxy()
+        if (net.mode == ConnectionMode.CUSTOM) net.mode = ConnectionMode.DIRECT
+        checkResult = null; Connection.changed(); changed()
+    }
+
     fun signOut() { Account.signOut(); changed() }
     fun signedIn() { changed() }
 
@@ -87,6 +172,7 @@ class SettingsModel(private val ctx: Context, private val prefs: Prefs, private 
             Setting.Toggle("hevc", "HEVC / 1440p (Enhanced Broadcasting)", hevcSupport(),
                 { prefs.allowHevc }) { prefs.allowHevc = it; changed() },
         )),
+        SettingGroup(NET_GROUP, listOf(connMode, rteServer, rteToken, proxy, netCheck, rteRevoke)),
         SettingGroup("Чат", listOf(
             Setting.Toggle("chat", "Чат при открытии стрима", null, { prefs.chatEnabled }) { prefs.chatEnabled = it; changed() },
             Setting.Toggle("emotes", "Эмоуты 7TV / BTTV / FFZ", null, { prefs.chatThirdPartyEmotes }) { prefs.chatThirdPartyEmotes = it; changed() },
@@ -116,6 +202,7 @@ class SettingsModel(private val ctx: Context, private val prefs: Prefs, private 
     )
 
     companion object {
+        const val NET_GROUP = "Сеть и прокси"
         fun hevcSupport(): String = when {
             DeviceCaps.hevc1440p60 -> "аппаратный HEVC 1440p60 есть"
             DeviceCaps.hevcHardware -> "аппаратный HEVC есть (1440p60 не заявлен)"
@@ -130,6 +217,7 @@ fun exportLogs(ctx: Context, prefs: Prefs, playerDiag: String?): String {
     val text = buildString {
         appendLine("TwitchTV ${BuildConfig.VERSION_NAME} (${BuildConfig.APPLICATION_ID})")
         appendLine("Настройки: ${prefs.dumpSettings()}")
+        if (Connection.isInitialized) appendLine("Сеть: ${Connection.settings.dump()}")
         appendLine(DeviceCaps.summary())
         playerDiag?.let { appendLine("--- Плеер ---"); appendLine(it) }
         appendLine("--- Журнал ---")

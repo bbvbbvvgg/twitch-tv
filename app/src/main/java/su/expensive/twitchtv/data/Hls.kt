@@ -37,10 +37,23 @@ object Hls {
      * Attributes of Twitch's #EXT-X-TWITCH-INFO line in the multivariant playlist (USER-COUNTRY,
      * NODE, …). USER-COUNTRY is Twitch's own geolocation of the address the usher request came
      * from — the only routing evidence the app can measure without a third-party service.
+     * Newer masters (and ReYohoho-built ones) carry the same data as
+     * #EXT-X-SESSION-DATA:DATA-ID="USER-COUNTRY",VALUE="DE" lines; both forms are read.
      */
-    fun twitchInfo(text: String): Map<String, String> =
-        text.lineSequence().firstOrNull { it.startsWith("#EXT-X-TWITCH-INFO:") }
-            ?.let { parseAttributes(it) } ?: emptyMap()
+    fun twitchInfo(text: String): Map<String, String> {
+        val out = HashMap<String, String>()
+        text.lineSequence().forEach { line ->
+            when {
+                line.startsWith("#EXT-X-TWITCH-INFO:") -> out.putAll(parseAttributes(line))
+                line.startsWith("#EXT-X-SESSION-DATA:") -> {
+                    val a = parseAttributes(line)
+                    val id = a["DATA-ID"]; val v = a["VALUE"]
+                    if (id != null && v != null) out.putIfAbsent(id, v)
+                }
+            }
+        }
+        return out
+    }
 
     fun parseMultivariant(text: String): List<Variant> {
         val lines = text.replace("\r", "").split('\n')

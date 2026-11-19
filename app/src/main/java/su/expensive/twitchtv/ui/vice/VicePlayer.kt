@@ -73,6 +73,8 @@ import kotlinx.coroutines.delay
 import su.expensive.twitchtv.chat.ChatClient
 import su.expensive.twitchtv.data.StreamItem
 import su.expensive.twitchtv.player.QualityChoice
+import su.expensive.twitchtv.ui.core.connectionLine
+import su.expensive.twitchtv.ui.core.proxyRetryLabel
 import su.expensive.twitchtv.ui.core.AppState
 import su.expensive.twitchtv.ui.core.ChatLineText
 import su.expensive.twitchtv.ui.core.PlayerSession
@@ -214,6 +216,7 @@ private fun RadioDial(s: PlayerSession, onDone: () -> Unit) {
         val st = stations.getOrNull(focusedIdx)
         Text(st?.name ?: "—", style = VType.mega.copy(shadow = VType.neon(V.magenta, 30f)), color = V.cream)
         Text(st?.sub ?: "", style = VType.body, color = V.dim)
+        Text(connectionLine(c).uppercase(), style = VType.tag, color = V.faint, modifier = Modifier.padding(top = 4.dp))
         Spacer(Modifier.height(16.dp))
         // The band: a thin dusk line the stations sit on.
         Box(contentAlignment = Alignment.Center) {
@@ -238,6 +241,7 @@ private fun RadioDial(s: PlayerSession, onDone: () -> Unit) {
                 }
             }
         }
+        proxyRetryLabel(c)?.let { label -> MenuItem(label, false, Modifier.padding(top = 6.dp), VType.row) { c.retryViaReyohoho() } }
         Text("←  →  НАСТРОИТЬ   ·   OK  ВЫБРАТЬ   ·   НАЗАД  ЗАКРЫТЬ", style = VType.tag, color = V.faint, modifier = Modifier.padding(top = 10.dp))
     }
     LaunchedEffect(Unit) { delay(80); runCatching { fr.requestFocus() } }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.RadioButtonChecked
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.runtime.Composable
@@ -64,6 +66,8 @@ import su.expensive.twitchtv.ui.core.Design
 import su.expensive.twitchtv.ui.core.DesignPreview
 import su.expensive.twitchtv.ui.core.LOGIN_PRIVACY
 import su.expensive.twitchtv.ui.core.Setting
+import su.expensive.twitchtv.ui.core.SettingsModel
+import su.expensive.twitchtv.net.Connection
 import su.expensive.twitchtv.ui.core.rememberDeviceLogin
 
 /**
@@ -78,10 +82,13 @@ private data class Cat(val title: String, val icon: ImageVector)
 fun GtvSettings(app: AppState) {
     val m = app.settings
     val cats = listOf(
-        Cat("Аккаунт", Icons.Rounded.AccountCircle), Cat("Воспроизведение", Icons.Rounded.PlayCircle), Cat("Чат", Icons.AutoMirrored.Rounded.Chat),
+        Cat("Аккаунт", Icons.Rounded.AccountCircle), Cat("Воспроизведение", Icons.Rounded.PlayCircle),
+        Cat(SettingsModel.NET_GROUP, Icons.Rounded.Router), Cat("Чат", Icons.AutoMirrored.Rounded.Chat),
         Cat("Интерфейс", Icons.Rounded.Palette), Cat("Диагностика", Icons.Rounded.Insights), Cat("О приложении", Icons.Rounded.Info),
     )
-    var sel by remember { mutableIntStateOf(if (app.openSettingsOnce) 3 else 0) }
+    var sel by remember { mutableIntStateOf(if (app.openNetworkOnce) 2 else if (app.openSettingsOnce) 4 else 0) }
+    var editingProxy by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
     Row(Modifier.fillMaxSize().padding(top = 84.dp)) {
         Column(Modifier.width(360.dp).fillMaxHeight().padding(start = 48.dp, end = 20.dp)) {
             Text("Настройки", style = TType.hero.copy(fontSize = 34.sp), color = T.text, modifier = Modifier.padding(bottom = 18.dp, start = 12.dp))
@@ -104,8 +111,21 @@ fun GtvSettings(app: AppState) {
                 LazyColumn(contentPadding = PaddingValues(28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     when (i) {
                         0 -> item { AccountPane(app) }
-                        3 -> item { DesignGallery(app) }
-                        5 -> items(m.aboutLines) { Text(it, style = TType.body, color = T.dim, modifier = Modifier.padding(bottom = 10.dp)) }
+                        4 -> item { DesignGallery(app) }
+                        2 -> {
+                            item { Text(SettingsModel.NET_GROUP, style = TType.headline, color = T.text, modifier = Modifier.padding(start = 18.dp, bottom = 4.dp)) }
+                            item { Text("Видео всегда идёт напрямую с CDN Twitch. Happ и другие VPN работают в режиме «Прямое».", style = TType.body,
+                                color = T.dim, modifier = Modifier.padding(start = 18.dp, bottom = 10.dp)) }
+                            val g = m.groups.first { it.title == SettingsModel.NET_GROUP }
+                            items(g.items, key = { it.id }) { s ->
+                                m.version; Connection.version
+                                if (s == m.proxy) {
+                                    SettingItem(s, m.valueOf(s)) { editingProxy = !editingProxy }
+                                    if (editingProxy) GtvProxyForm(m) { editingProxy = false }
+                                } else SettingItem(s, m.valueOf(s))
+                            }
+                        }
+                        6 -> items(m.aboutLines) { Text(it, style = TType.body, color = T.dim, modifier = Modifier.padding(bottom = 10.dp)) }
                         else -> {
                             val g = m.groups.first { it.title == cats[i].title }
                             items(g.items, key = { it.id }) { s -> m.version; SettingItem(s, m.valueOf(s)) }
@@ -115,10 +135,12 @@ fun GtvSettings(app: AppState) {
             }
         }
     }
+    if (m.consentAsk) GtvConsent(m)
+    }
 }
 
 @Composable
-private fun SettingItem(s: Setting, value: String) {
+private fun SettingItem(s: Setting, value: String, onScreen: () -> Unit = {}) {
     var expanded by remember { mutableStateOf(false) }
     Column {
         Surface(
@@ -127,7 +149,7 @@ private fun SettingItem(s: Setting, value: String) {
                     is Setting.Toggle -> s.flip()
                     is Setting.Choice -> expanded = !expanded
                     is Setting.Action -> s.run()
-                    is Setting.Screen -> {}
+                    is Setting.Screen -> onScreen()
                 }
             },
             modifier = Modifier.fillMaxWidth(),
@@ -145,7 +167,8 @@ private fun SettingItem(s: Setting, value: String) {
                 when (s) {
                     is Setting.Toggle -> Switch(checked = s.get(), onCheckedChange = null,
                         colors = SwitchDefaults.colors(checkedThumbColor = T.onFocus, checkedTrackColor = T.accent))
-                    is Setting.Action -> Text(value, style = TType.caption, maxLines = 1)
+                    is Setting.Action -> Text(value, style = TType.caption, maxLines = 2, modifier = Modifier.widthIn(max = 420.dp))
+                    is Setting.Screen -> Text(value, style = TType.caption, maxLines = 1)
                     else -> {}
                 }
             }

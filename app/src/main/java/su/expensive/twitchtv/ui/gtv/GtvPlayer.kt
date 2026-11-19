@@ -71,6 +71,8 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import su.expensive.twitchtv.chat.ChatClient
 import su.expensive.twitchtv.player.QualityChoice
+import su.expensive.twitchtv.ui.core.connectionLine
+import su.expensive.twitchtv.ui.core.proxyRetryLabel
 import su.expensive.twitchtv.ui.core.AppState
 import su.expensive.twitchtv.ui.core.ChatLineText
 import su.expensive.twitchtv.ui.core.PlayerSession
@@ -204,7 +206,8 @@ private fun QualityPanel(s: PlayerSession, onDone: () -> Unit) {
     Column(Modifier.fillMaxHeight().width(420.dp).background(T.surface).padding(28.dp)
         .focusProperties { exit = { FocusRequester.Cancel } }.focusGroup()) {
         Text("Качество видео", style = TType.headline, color = T.text)
-        Text(s.qualityLabel, style = TType.caption, color = T.dim, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
+        Text(s.qualityLabel, style = TType.caption, color = T.dim, modifier = Modifier.padding(top = 4.dp))
+        Text(connectionLine(c), style = TType.caption, color = T.faint, modifier = Modifier.padding(top = 2.dp, bottom = 16.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             item { RadioRow("Автоматически", c.current?.let { "Сейчас ${it.label}, по скорости сети" } ?: "По скорости сети", c.userChoice == null, Modifier.focusRequester(fr)) { s.selectQuality(null); onDone() } }
             items(c.variants) { v ->
@@ -212,6 +215,9 @@ private fun QualityPanel(s: PlayerSession, onDone: () -> Unit) {
                 RadioRow(v.label + if (v.isSource) " (источник)" else "", "${v.codecLabel} · ${"%.1f".format(v.bandwidth / 1_000_000.0)} Мбит/с", sel) {
                     s.selectQuality(QualityChoice(v.height, v.fpsRounded, v.isHevc)); onDone()
                 }
+            }
+            proxyRetryLabel(c)?.let { label ->
+                item { RadioRow(label, "Разово через Reyohoho; текущий поток не прервётся", false) { c.retryViaReyohoho() } }
             }
         }
     }

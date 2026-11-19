@@ -177,6 +177,36 @@ class DesignScreenshots {
         assertEquals("VICE", ctx.getSharedPreferences("twitchtv", Context.MODE_PRIVATE).getString("design", null))
     }
 
+    /** «Сеть и прокси» in each design, then the Reyohoho consent modal (declined: mode stays Direct). */
+    private fun runNetwork(d: Design) {
+        assumeTrue(System.getProperty("shots") == "true")
+        launch(if (d == Design.CLASSIC) Design.GTV else Design.CLASSIC)
+        scenario!!.onActivity { it.app.openNetworkOnce = true; it.app.applyDesign(d) }
+        pump(2500)
+        var n = 0
+        val netVisible = { t: List<String> -> t.any { it.contains("Проверить подключение", ignoreCase = true) || (d == Design.VICE && it == "СВОЙ ПРОКСИ") } }
+        while (n < 30 && !netVisible(texts())) { key(KeyEvent.KEYCODE_DPAD_DOWN); n++ }
+        // Lists that scroll (Classic, Glass): a few more steps so the whole section is on screen.
+        if (d == Design.GLASS) key(KeyEvent.KEYCODE_DPAD_DOWN, 3)
+        assertTrue("${d.name}: network section visible", waitFor("network section", 10_000, netVisible))
+        note("${d.name}: network section after $n DOWN; visible=" + texts().take(12))
+        shot("${d.name.lowercase()}-4-network")
+        val m = activity().app.settings
+        scenario!!.onActivity { m.chooseMode(su.expensive.twitchtv.net.ConnectionMode.REYOHOHO) }
+        pump(1200)
+        assertTrue("${d.name}: consent modal", m.consentAsk)
+        waitFor("consent text", 10_000) { t -> t.any { it.contains("OAuth") } }
+        shot("${d.name.lowercase()}-5-consent")
+        scenario!!.onActivity { m.declineConsent() }
+        pump(800)
+        assertEquals(su.expensive.twitchtv.net.ConnectionMode.DIRECT, su.expensive.twitchtv.net.Connection.settings.mode)
+    }
+
+    @Test fun networkClassic() = runNetwork(Design.CLASSIC)
+    @Test fun networkGlass() = runNetwork(Design.GLASS)
+    @Test fun networkGoogleTv() = runNetwork(Design.GTV)
+    @Test fun networkVice() = runNetwork(Design.VICE)
+
     /** Homes at 1280×720 (tvdpi) — the other common TV output resolution. */
     @Config(qualifiers = "w960dp-h540dp-land-television-tvdpi")
     @Test fun homesAt720p() {

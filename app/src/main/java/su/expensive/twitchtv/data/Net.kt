@@ -45,15 +45,46 @@ object Net {
 
     val http: OkHttpClient get() = client ?: error("Net.init not called")
 
+    /**
+     * Short-timeout client for ReYohoho master playlists. Built once from [http] (shares its pool
+     * and dispatcher, no extra threads) so a dead proxy costs seconds, not the 20 s API timeout.
+     */
+    val proxyApi: OkHttpClient by lazy {
+        http.newBuilder().connectTimeout(4, TimeUnit.SECONDS).readTimeout(6, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS).retryOnConnectionFailure(false).cache(null).build()
+    }
+
+    @Volatile private var custom: Pair<su.expensive.twitchtv.net.CustomProxy, OkHttpClient>? = null
+
+    /**
+     * Client that reaches the user's own proxy. Cached per configuration (rebuilt only when the
+     * user changes it). Only gql.twitch.tv and usher.ttvnw.net requests use it; segments do not.
+     */
+    @Synchronized
+    fun viaProxy(p: su.expensive.twitchtv.net.CustomProxy): OkHttpClient {
+        custom?.let { (cfg, c) -> if (cfg == p) return c }
+        val type = if (p.kind == su.expensive.twitchtv.net.ProxyKind.SOCKS5) java.net.Proxy.Type.SOCKS else java.net.Proxy.Type.HTTP
+        val b = http.newBuilder()
+            .proxy(java.net.Proxy(type, java.net.InetSocketAddress.createUnresolved(p.host.trim(), p.port)))
+            .connectTimeout(6, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).cache(null)
+        if (p.user.isNotEmpty() && p.kind == su.expensive.twitchtv.net.ProxyKind.HTTP) {
+            b.proxyAuthenticator { _, resp ->
+                if (resp.request.header("Proxy-Authorization") != null) null // wrong credentials: no loop
+                else resp.request.newBuilder().header("Proxy-Authorization", okhttp3.Credentials.basic(p.user, p.password)).build()
+            }
+        }
+        return b.build().also { custom = p to it }
+    }
+
     fun onNetworkChanged() {
         client?.connectionPool?.evictAll()
     }
 
     @Throws(IOException::class)
-    fun getText(url: String, headers: Map<String, String> = emptyMap()): HttpText {
+    fun getText(url: String, headers: Map<String, String> = emptyMap(), via: OkHttpClient = http): HttpText {
         val b = Request.Builder().url(url)
         headers.forEach { (k, v) -> b.header(k, v) }
-        http.newCall(b.build()).execute().use { r ->
+        via.newCall(b.build()).execute().use { r ->
             return HttpText(r.code, r.body?.string() ?: "")
         }
     }

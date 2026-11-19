@@ -1,6 +1,8 @@
 package su.expensive.twitchtv.ui.classic
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,9 +39,12 @@ import su.expensive.twitchtv.ui.core.Setting
 fun SettingsScreen(app: AppState) {
     val m = app.settings
     var loggingIn by remember { mutableStateOf(false) }
-    var picking by remember { mutableStateOf(app.openSettingsOnce) }
+    var picking by remember { mutableStateOf(app.openSettingsOnce && !app.openNetworkOnce) }
+    var pickingConn by remember { mutableStateOf(false) }
+    var editingProxy by remember { mutableStateOf(false) }
     val rows = m.groups.flatMap { it.items }
 
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(contentPadding = PaddingValues(bottom = 48.dp), modifier = Modifier.fillMaxWidth(0.75f)) {
         items(rows, key = { it.id }) { s ->
             m.version
@@ -56,6 +61,14 @@ fun SettingsScreen(app: AppState) {
                     Row(s.title, m.valueOf(s), s.hint) { picking = !picking }
                     if (picking) DesignList(app)
                 }
+                m.connMode -> {
+                    Row(s.title, m.valueOf(s), s.hint) { pickingConn = !pickingConn }
+                    if (pickingConn) ClassicModeList(m) { pickingConn = false }
+                }
+                m.proxy -> {
+                    Row(s.title, m.valueOf(s), s.hint) { editingProxy = !editingProxy }
+                    if (editingProxy) ClassicProxyPanel(m) { editingProxy = false }
+                }
                 is Setting.Toggle -> Row(s.title, m.valueOf(s), s.hint) { s.flip() }
                 is Setting.Choice -> Row(s.title, m.valueOf(s), s.hint) { s.step(1) }
                 is Setting.Action -> Row(s.title, m.valueOf(s), s.hint) { s.run() }
@@ -70,6 +83,8 @@ fun SettingsScreen(app: AppState) {
                 }
             }
         }
+    }
+    if (m.consentAsk) ClassicConsent(m)
     }
 }
 

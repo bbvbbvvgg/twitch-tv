@@ -87,7 +87,7 @@ fun GtvApp(app: AppState) {
             GtvPlayer(app, s)
         }
     }
-    LaunchedEffect(Unit) { app.openSettingsOnce = false }
+    LaunchedEffect(Unit) { app.openSettingsOnce = false; app.openNetworkOnce = false }
 }
 
 @UnstableApi

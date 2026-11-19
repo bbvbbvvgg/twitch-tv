@@ -86,6 +86,8 @@ import kotlinx.coroutines.delay
 import su.expensive.twitchtv.chat.ChatClient
 import su.expensive.twitchtv.data.StreamItem
 import su.expensive.twitchtv.player.QualityChoice
+import su.expensive.twitchtv.ui.core.connectionLine
+import su.expensive.twitchtv.ui.core.proxyRetryLabel
 import su.expensive.twitchtv.ui.core.AppState
 import su.expensive.twitchtv.ui.core.ChatLineText
 import su.expensive.twitchtv.ui.core.PlayerSession
@@ -222,7 +224,8 @@ private fun QualityColumn(s: PlayerSession, onDone: () -> Unit) {
         .background(Color(0x59000000), RoundedCornerShape(36.dp)).padding(22.dp)
         .focusProperties { exit = { FocusRequester.Cancel } }.focusGroup()) {
         Text("Качество", style = GType.title, color = G.text)
-        Text("Сейчас: ${s.qualityLabel}", style = GType.small, color = G.dim, modifier = Modifier.padding(top = 4.dp, bottom = 14.dp))
+        Text("Сейчас: ${s.qualityLabel}", style = GType.small, color = G.dim, modifier = Modifier.padding(top = 4.dp))
+        Text(connectionLine(c), style = GType.small, color = G.faint, modifier = Modifier.padding(top = 2.dp, bottom = 14.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 6.dp, horizontal = 4.dp)) {
             item {
                 QualityRow("Авто", c.current?.let { "сейчас ${it.label}" } ?: "по сети", c.userChoice == null, Modifier.focusRequester(fr)) { s.selectQuality(null); onDone() }
@@ -232,6 +235,9 @@ private fun QualityColumn(s: PlayerSession, onDone: () -> Unit) {
                 QualityRow(v.label, "${v.codecLabel} · ${"%.1f".format(v.bandwidth / 1_000_000.0)} Мбит/с" + if (v.isSource) " · источник" else "", sel) {
                     s.selectQuality(QualityChoice(v.height, v.fpsRounded, v.isHevc)); onDone()
                 }
+            }
+            proxyRetryLabel(c)?.let { label ->
+                item { QualityRow(label, "разово для этого стрима, текущий поток не прервётся", false) { c.retryViaReyohoho() } }
             }
         }
     }

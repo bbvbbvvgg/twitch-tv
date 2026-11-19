@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -58,6 +59,7 @@ import su.expensive.twitchtv.ui.core.Design
 import su.expensive.twitchtv.ui.core.DesignPreview
 import su.expensive.twitchtv.ui.core.LOGIN_PRIVACY
 import su.expensive.twitchtv.ui.core.Setting
+import su.expensive.twitchtv.ui.core.SettingsModel
 import su.expensive.twitchtv.ui.core.rememberDeviceLogin
 
 /**
@@ -65,13 +67,15 @@ import su.expensive.twitchtv.ui.core.rememberDeviceLogin
  * ◀ value ▶ selector changed with ←/→ (or OK to step forward), like a game's options screen.
  * Design choice is a row of postcards; sign-in shows the code on a neon board.
  */
-private val TABS = listOf("Аккаунт", "Видео", "Чат", "Интерфейс", "Диагностика")
+private val TABS = listOf("Аккаунт", "Видео", "Сеть", "Чат", "Интерфейс", "Диагностика")
 
 @UnstableApi
 @Composable
 fun ViceSettings(app: AppState) {
     val m = app.settings
-    var tab by remember { mutableIntStateOf(if (app.openSettingsOnce) 3 else 1) }
+    var tab by remember { mutableIntStateOf(if (app.openNetworkOnce) 2 else if (app.openSettingsOnce) 4 else 1) }
+    var editingProxy by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         NeonTitle("Настройки", V.teal, Modifier.padding(bottom = 16.dp), VType.mega.copy(fontSize = 44.sp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -90,27 +94,44 @@ fun ViceSettings(app: AppState) {
             LazyColumn(contentPadding = PaddingValues(top = 12.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 when (t) {
                     0 -> item { AccountBoard(app) }
-                    3 -> item { DesignPostcards(app) }
+                    4 -> item { DesignPostcards(app) }
+                    2 -> {
+                        item { Text("Видео всегда идёт напрямую с CDN Twitch. С Happ VPN оставьте маршрут «Прямое».", style = VType.body,
+                            color = V.dim, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)) }
+                        items(m.groups.first { it.title == SettingsModel.NET_GROUP }.items, key = { it.id }) { s ->
+                            m.version
+                            when (s) {
+                                m.connMode -> ViceModeRow(m)
+                                m.proxy -> {
+                                    OptionRow(s, m.valueOf(s)) { editingProxy = !editingProxy }
+                                    if (editingProxy) ViceProxyBoard(m) { editingProxy = false }
+                                }
+                                else -> OptionRow(s, m.valueOf(s))
+                            }
+                        }
+                    }
                     else -> {
-                        val group = when (t) { 1 -> "Воспроизведение"; 2 -> "Чат"; else -> "Диагностика" }
+                        val group = when (t) { 1 -> "Воспроизведение"; 3 -> "Чат"; else -> "Диагностика" }
                         items(m.groups.first { it.title == group }.items, key = { it.id }) { s -> m.version; OptionRow(s, m.valueOf(s)) }
-                        if (t == 4) items(m.aboutLines) { Text(it, style = VType.small, color = V.faint, modifier = Modifier.padding(start = 16.dp, top = 8.dp)) }
+                        if (t == 5) items(m.aboutLines) { Text(it, style = VType.small, color = V.faint, modifier = Modifier.padding(start = 16.dp, top = 8.dp)) }
                     }
                 }
             }
         }
     }
+    if (m.consentAsk) ViceConsent(m)
+    }
 }
 
 @Composable
-private fun OptionRow(s: Setting, value: String) {
+private fun OptionRow(s: Setting, value: String, onScreen: () -> Unit = {}) {
     var focused by remember { mutableStateOf(false) }
     val cyclic = s is Setting.Toggle || s is Setting.Choice
     fun change(d: Int) = when (s) {
         is Setting.Toggle -> s.flip()
         is Setting.Choice -> s.step(d)
         is Setting.Action -> if (d > 0) s.run() else Unit
-        is Setting.Screen -> Unit
+        is Setting.Screen -> if (d > 0) onScreen() else Unit
     }
     Surface(
         onClick = { change(1) },
@@ -138,7 +159,7 @@ private fun OptionRow(s: Setting, value: String) {
                     modifier = Modifier.width(210.dp).padding(horizontal = 6.dp), maxLines = 1,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "больше", Modifier.size(26.dp).alpha(if (focused) 1f else 0.35f))
-            } else Text(value, style = VType.small, maxLines = 1, modifier = Modifier.padding(start = 12.dp))
+            } else Text(value, style = VType.small, maxLines = 2, modifier = Modifier.padding(start = 12.dp).widthIn(max = 460.dp))
         }
     }
 }
