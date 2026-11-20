@@ -40,7 +40,7 @@ class TokenStore(context: Context) {
             .putString("iv", Base64.encodeToString(c.iv, Base64.NO_WRAP))
             .putString("ct", Base64.encodeToString(ct, Base64.NO_WRAP))
             .putString("login", login)
-            .apply()
+            .commit() // synchronous: the app is often killed right after sign-in (Home, power off)
     }
 
     @Synchronized
@@ -50,12 +50,20 @@ class TokenStore(context: Context) {
         val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv)) }
         val j = JSONObject(String(c.doFinal(ct)))
         TwitchAuth.Tokens(j.getString("a"), j.optString("r").ifEmpty { null }, j.getLong("e"))
-    }.getOrElse { clear(); null } // key invalidated / data corrupt → signed out, never crash
+    }.getOrElse { e ->
+        // Never wipe here: a Keystore hiccup at cold start (seen on TCL firmware) used to sign the
+        // viewer out on every launch. Keep the ciphertext; the next launch tries again.
+        note("не удалось прочитать токен: ${e.javaClass.simpleName}"); null
+    }
+
+    /** Last auth event, persisted so the diagnostics screen can say why a session ended. */
+    fun note(msg: String) { sp.edit().putString("last_event", msg).putLong("last_event_at", System.currentTimeMillis()).commit() }
+    val lastEvent: String? get() = sp.getString("last_event", null)
 
     val login: String? get() = sp.getString("login", null)
 
     @Synchronized
-    fun clear() { sp.edit().clear().apply() }
+    fun clear() { sp.edit().remove("iv").remove("ct").remove("login").commit() }
 
     private companion object { const val ALIAS = "twitchtv_oauth_v1" }
 }

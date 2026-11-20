@@ -21,6 +21,7 @@ object Account {
         store = TokenStore(context)
         cached = store.load()
         login = if (cached != null) store.login else null
+        store.lastEvent?.let { DiagLog.log("Twitch-сессия, последнее событие: $it") }
     }
 
     val signedIn: Boolean get() = cached != null
@@ -52,12 +53,26 @@ object Account {
         if (forceRefresh || now > t.expiresAtMs - 5 * 60_000) {
             val r = t.refresh ?: run { expire("нет refresh-токена"); return null }
             val nt = try { TwitchAuth.refresh(r) } catch (e: IOException) { return t.access.takeIf { now < t.expiresAtMs } }
-            if (nt == null) { expire("refresh отклонён"); return null }
+            if (nt == null) {
+                // Refresh refused. Only end the session when Twitch also says the access token is dead;
+                // a rejected GQL call or a refresh hiccup must not sign the viewer out.
+                val alive = try { TwitchAuth.validate(t.access) != null } catch (e: IOException) { true }
+                if (!alive) { expire("refresh отклонён, токен недействителен"); return null }
+                store.note("refresh отклонён, токен ещё действует"); lastValidatedAt = now
+                return t.access.takeIf { !forceRefresh }
+            }
             store.save(nt, login ?: ""); cached = nt; t = nt; lastValidatedAt = now
             DiagLog.log("Токен Twitch обновлён")
         } else if (now - lastValidatedAt > 3_600_000) {
             val v = try { TwitchAuth.validate(t.access) } catch (e: IOException) { return t.access }
-            if (v == null) return accessToken(forceRefresh = true)
+            if (v == null) {
+                // forceRefresh would loop back into validate; refresh directly instead
+                val r = t.refresh ?: run { expire("токен недействителен, нет refresh"); return null }
+                val nt = try { TwitchAuth.refresh(r) } catch (e: IOException) { return null }
+                if (nt == null) { expire("токен недействителен, refresh отклонён"); return null }
+                store.save(nt, login ?: ""); cached = nt; lastValidatedAt = now
+                return nt.access
+            }
             lastValidatedAt = now
         }
         return t.access
@@ -65,6 +80,7 @@ object Account {
 
     private fun expire(why: String) {
         DiagLog.log("Сессия Twitch завершена ($why) — продолжаю анонимно")
+        store.note(why)
         cached = null; login = null; store.clear()
     }
 }
